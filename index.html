@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#090c12" />
+    <title>VibeGame · 2D 大逃杀原型</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="lobby" class="screen lobby-screen">
+        <div class="brand-block">
+          <span class="eyebrow">2D ACTION BATTLE ROYALE · PROTOTYPE</span>
+          <h1>裂隙<span>战场</span></h1>
+          <p>选择转职，配置四个技能，在不断崩坏的战场中成为最后的幸存者。</p>
+        </div>
+
+        <div class="lobby-grid">
+          <section class="panel career-panel">
+            <div class="panel-title"><span>01</span><div><h2>选择转职</h2><p>每局只能选择一个转职</p></div></div>
+            <div id="career-list" class="career-list"></div>
+          </section>
+
+          <section class="panel skill-panel">
+            <div class="panel-title"><span>02</span><div><h2>配置技能</h2><p>选择四个技能装入 Q / W / E / R</p></div></div>
+            <div id="skill-slots" class="skill-slots"></div>
+            <div id="skill-list" class="skill-list"></div>
+          </section>
+
+          <section class="panel settings-panel">
+            <div class="panel-title"><span>03</span><div><h2>战斗设置</h2><p>配置会保存到服务器</p></div></div>
+            <div id="binding-list" class="binding-list"></div>
+            <div class="settings-actions">
+              <button id="reset-bindings" class="text-button">恢复默认</button>
+              <span id="save-status">尚未保存</span>
+              <button id="save-config" class="secondary-button">保存配置</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="launch-bar">
+          <div class="mode-info"><strong>单人试炼</strong><span>你 + 11 名机器人 · 约 3 分钟</span></div>
+          <button id="start-game" class="primary-button">进入裂隙 <span>→</span></button>
+        </div>
+      </section>
+
+      <section id="game-screen" class="screen game-screen hidden">
+        <canvas id="game-canvas" width="1280" height="720"></canvas>
+        <div class="game-vignette"></div>
+        <header class="hud-top">
+          <div class="alive-card"><span>存活</span><strong id="alive-count">12</strong></div>
+          <div class="zone-card"><span id="zone-label">安全区稳定</span><strong id="zone-timer">00:45</strong></div>
+          <div class="kill-card"><span>击败</span><strong id="kill-count">0</strong></div>
+        </header>
+        <aside class="player-hud">
+          <div class="avatar" id="hud-avatar">剑</div>
+          <div class="player-bars">
+            <div class="hud-name"><strong id="hud-career">狂战</strong><span>Lv.1</span></div>
+            <div class="bar health-bar"><i id="health-fill"></i><span id="health-text">100 / 100</span></div>
+            <div class="gear-line"><span id="weapon-text">训练长剑</span><span id="armor-text">无防具</span></div>
+          </div>
+        </aside>
+        <div id="skill-hud" class="skill-hud"></div>
+        <div class="help-hud"><span>方向键移动</span><span>J / 左键普攻</span><span>F 拾取</span><span>1 药剂</span><span>ESC 暂停</span></div>
+        <div id="pickup-prompt" class="pickup-prompt hidden"></div>
+        <div id="feed" class="feed"></div>
+        <div id="pause-panel" class="pause-panel hidden">
+          <span>GAME PAUSED</span><h2>战斗暂停</h2><button id="resume-game" class="primary-button">继续战斗</button><button id="quit-game" class="text-button">返回大厅</button>
+        </div>
+      </section>
+
+      <section id="result-screen" class="screen result-screen hidden">
+        <div class="result-card">
+          <span id="result-kicker" class="eyebrow">BATTLE COMPLETE</span>
+          <h1 id="result-title">试炼结束</h1>
+          <p id="result-subtitle">你在裂隙中留下了自己的印记。</p>
+          <div class="result-stats">
+            <div><span>最终排名</span><strong id="result-rank">#1</strong></div>
+            <div><span>击败数量</span><strong id="result-kills">0</strong></div>
+            <div><span>造成伤害</span><strong id="result-damage">0</strong></div>
+            <div><span>存活时间</span><strong id="result-time">00:00</strong></div>
+          </div>
+          <button id="play-again" class="primary-button">再次进入战场</button>
+          <button id="back-lobby" class="text-button">返回配置</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
