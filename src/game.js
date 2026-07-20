@@ -41,11 +41,22 @@ function createObstacles() {
   ];
 }
 
-function makeLoot(x, y, forcedType) {
+function createPreparationObstacles() {
+  return [
+    { x: 420, y: 250, w: 280, h: 150, label: "补给仓" },
+    { x: 420, y: 1130, w: 280, h: 150, label: "医疗站" },
+    { x: 980, y: 260, w: 430, h: 120, label: "领主祭坛" },
+    { x: 980, y: 1220, w: 430, h: 120, label: "破碎回廊" },
+    { x: 1670, y: 360, w: 260, h: 180, label: "传送前厅" },
+    { x: 1670, y: 1060, w: 260, h: 180, label: "传送前厅" },
+  ];
+}
+
+function makeLoot(x, y, forcedType, forcedQuality) {
   const type = forcedType || (Math.random() < 0.3 ? "potion" : Math.random() < 0.55 ? "weapon" : "armor");
   if (type === "potion") return { x, y, type, name: "生命药剂", color: "#57d99a", quality: QUALITIES[0], amount: 1 };
   const roll = Math.random();
-  const quality = roll > 0.9 ? QUALITIES[2] : roll > 0.52 ? QUALITIES[1] : QUALITIES[0];
+  const quality = forcedQuality || (roll > 0.9 ? QUALITIES[2] : roll > 0.52 ? QUALITIES[1] : QUALITIES[0]);
   const list = type === "weapon" ? WEAPONS : ARMORS;
   return {
     x, y, type, quality, color: quality.color,
@@ -69,8 +80,12 @@ export class BattleGame {
     this.projectiles = [];
     this.effects = [];
     this.loot = [];
-    this.obstacles = createObstacles();
+    this.obstacles = createPreparationObstacles();
     this.entities = [];
+    this.stage = "preparation";
+    this.battleElapsed = 0;
+    this.preparation = { timer: 60, bossDamage: 0, rewarded: false };
+    this.portal = { x: 2150, y: WORLD.height / 2, radius: 64 };
     this.zone = { x: WORLD.width / 2, y: WORLD.height / 2, radius: 1050, phase: 0, label: "安全区稳定", timer: 35 };
     this.camera = { x: 0, y: 0 };
     this.stats = { kills: 0, damage: 0, startedAt: 0, rank: 12 };
@@ -87,7 +102,7 @@ export class BattleGame {
 
   start() {
     this.resize();
-    this.setupMatch();
+    this.setupPreparation();
     this.running = true;
     this.stats.startedAt = performance.now();
     window.addEventListener("keydown", this.onKeyDown);
@@ -122,13 +137,51 @@ export class BattleGame {
     this.viewHeight = height;
   }
 
-  setupMatch() {
+  setupPreparation() {
     const career = getCareer(this.config.careerId);
     const skillIds = this.config.skillsByCareer[career.id];
     this.player = this.createFighter({
-      id: "player", name: "你", career, skillIds, x: 320, y: WORLD.height / 2, isPlayer: true,
+      id: "player", name: "你", career, skillIds, x: 260, y: WORLD.height / 2, isPlayer: true,
     });
     this.entities.push(this.player);
+
+    const bossCareer = CAREERS[0];
+    this.boss = this.createFighter({
+      id: "prep-boss", name: "裂隙领主", career: bossCareer,
+      skillIds: bossCareer.skills.slice(0, 4).map((skill) => skill.id),
+      x: 1180, y: WORLD.height / 2,
+    });
+    Object.assign(this.boss, { isBoss: true, radius: 42, speed: 112, health: 720, maxHealth: 720 });
+    this.boss.ai.skillDelay = 4;
+    this.entities.push(this.boss);
+
+    for (let i = 0; i < 14; i += 1) {
+      const point = this.openPoint();
+      const forcedType = i < 4 ? "potion" : undefined;
+      this.loot.push(makeLoot(point.x, point.y, forcedType));
+    }
+    this.hooks.onFeed?.("独立发育区已开启：60 秒后自动进入主战场");
+    this.hooks.onFeed?.("可挑战裂隙领主，也可前往右侧传送门直接离开");
+  }
+
+  enterBattlefield(reason = "portal") {
+    if (this.stage !== "preparation") return;
+    this.grantBossReward();
+    this.stage = "battle";
+    this.battleElapsed = 0;
+    this.projectiles = [];
+    this.effects = [];
+    this.loot = [];
+    this.obstacles = createObstacles();
+    this.entities = [this.player];
+    this.player.x = 320;
+    this.player.y = WORLD.height / 2;
+    this.player.invulnerable = 1.5;
+    this.player.attackCooldown = 0;
+    this.player.cooldowns = this.player.cooldowns.map(() => 0);
+    this.camera.x = 0;
+    this.camera.y = 0;
+    this.zone = { x: WORLD.width / 2, y: WORLD.height / 2, radius: 1050, phase: 0, label: "安全区稳定", timer: 35 };
 
     BOT_NAMES.forEach((name, index) => {
       const botCareer = CAREERS[index % CAREERS.length];
@@ -146,7 +199,21 @@ export class BattleGame {
       const point = this.openPoint();
       this.loot.push(makeLoot(point.x, point.y));
     }
+    this.hooks.onFeed?.(reason === "timeout" ? "发育时间结束，已传送至主战场" : "已主动进入主战场");
     this.hooks.onFeed?.("战场已开启，寻找物资并进入安全区");
+  }
+
+  grantBossReward() {
+    if (this.preparation.rewarded || this.preparation.bossDamage <= 0) return null;
+    this.preparation.rewarded = true;
+    const ratio = clamp(this.preparation.bossDamage / this.boss.maxHealth, 0, 1);
+    const quality = ratio >= 0.67 ? QUALITIES[2] : ratio >= 0.3 ? QUALITIES[1] : QUALITIES[0];
+    const type = Math.random() < 0.55 ? "weapon" : "armor";
+    const reward = makeLoot(this.player.x, this.player.y, type, quality);
+    if (type === "weapon") this.player.gear.weapon = reward;
+    else this.player.gear.armor = reward;
+    this.hooks.onFeed?.(`Boss 贡献 ${Math.round(ratio * 100)}%，获得 ${reward.name}`);
+    return reward;
   }
 
   createFighter({ id, name, career, skillIds, x, y, isPlayer = false }) {
@@ -217,13 +284,19 @@ export class BattleGame {
 
   update(dt) {
     this.elapsed += dt;
-    this.updateZone(dt);
+    if (this.stage === "preparation") {
+      this.preparation.timer = Math.max(0, this.preparation.timer - dt);
+      if (this.preparation.timer <= 0) this.enterBattlefield("timeout");
+    } else {
+      this.battleElapsed += dt;
+      this.updateZone();
+    }
     this.updatePlayer(dt);
     this.entities.forEach((entity) => {
       if (!entity.alive) return;
       this.updateTimers(entity, dt);
       if (!entity.isPlayer) this.updateBot(entity, dt);
-      this.applyZoneDamage(entity, dt);
+      if (this.stage === "battle") this.applyZoneDamage(entity, dt);
     });
     this.updateProjectiles(dt);
     this.updateEffects(dt);
@@ -279,7 +352,7 @@ export class BattleGame {
       dx = (target.x - bot.x) / (dist || 1);
       dy = (target.y - bot.y) / (dist || 1);
       bot.facing = { x: dx, y: dy };
-      if (dist < 95) this.basicAttack(bot);
+      if (dist < (bot.isBoss ? 125 : 95)) this.basicAttack(bot);
       if (bot.ai.skillDelay <= 0 && dist < 440) {
         const available = bot.cooldowns.map((cooldown, index) => cooldown <= 0 ? index : -1).filter((index) => index >= 0);
         if (available.length) this.castSkill(bot, available[Math.floor(Math.random() * available.length)]);
@@ -292,7 +365,7 @@ export class BattleGame {
     }
 
     const zoneDistance = Math.hypot(bot.x - this.zone.x, bot.y - this.zone.y);
-    if (zoneDistance > this.zone.radius - 90) {
+    if (this.stage === "battle" && zoneDistance > this.zone.radius - 90) {
       const towardZone = Math.atan2(this.zone.y - bot.y, this.zone.x - bot.x);
       dx = Math.cos(towardZone); dy = Math.sin(towardZone);
     }
@@ -315,16 +388,17 @@ export class BattleGame {
 
   basicAttack(attacker) {
     if (!attacker.alive || attacker.attackCooldown > 0) return;
-    attacker.attackCooldown = attacker.buffTimer > 0 ? 0.29 : 0.44;
-    const origin = { x: attacker.x + attacker.facing.x * 45, y: attacker.y + attacker.facing.y * 45 };
+    attacker.attackCooldown = attacker.isBoss ? 1.15 : attacker.buffTimer > 0 ? 0.29 : 0.44;
+    const attackRange = attacker.isBoss ? 132 : 92;
+    const origin = { x: attacker.x + attacker.facing.x * (attacker.isBoss ? 62 : 45), y: attacker.y + attacker.facing.y * (attacker.isBoss ? 62 : 45) };
     this.effects.push({ type: "slash", x: origin.x, y: origin.y, angle: Math.atan2(attacker.facing.y, attacker.facing.x), color: attacker.career.color, life: 0.2, maxLife: 0.2 });
-    const damage = 17 + (attacker.gear.weapon?.value || 0);
+    const damage = (attacker.isBoss ? 24 : 17) + (attacker.gear.weapon?.value || 0);
     this.targetsOf(attacker).forEach((target) => {
       const dx = target.x - attacker.x;
       const dy = target.y - attacker.y;
       const dist = Math.hypot(dx, dy);
-      if (dist <= 92 && (dx * attacker.facing.x + dy * attacker.facing.y) / (dist || 1) > 0.2) {
-        this.damageEntity(target, damage, attacker, { knockback: 45 });
+      if (dist <= attackRange && (dx * attacker.facing.x + dy * attacker.facing.y) / (dist || 1) > 0.2) {
+        this.damageEntity(target, damage, attacker, { knockback: attacker.isBoss ? 85 : 45 });
       }
     });
   }
@@ -417,6 +491,7 @@ export class BattleGame {
       damage -= absorbed;
     }
     if (damage <= 0) return 0;
+    damage = Math.min(damage, target.health);
     target.health -= damage;
     target.flash = 0.1;
     if (options.slow) target.slowTimer = Math.max(target.slowTimer, 2.4);
@@ -424,11 +499,15 @@ export class BattleGame {
       const dx = target.x - attacker.x;
       const dy = target.y - attacker.y;
       const length = Math.hypot(dx, dy) || 1;
-      this.moveEntity(target, dx / length * options.knockback, dy / length * options.knockback);
+      const force = target.isBoss ? options.knockback * 0.12 : options.knockback;
+      this.moveEntity(target, dx / length * force, dy / length * force);
     }
     if (attacker !== target) {
       attacker.damage += damage;
       if (attacker.isPlayer) this.stats.damage += damage;
+    }
+    if (this.stage === "preparation" && target.isBoss && attacker.isPlayer) {
+      this.preparation.bossDamage = Math.min(target.maxHealth, this.preparation.bossDamage + damage);
     }
     this.effects.push({ type: "damage", x: target.x, y: target.y - 28, text: Math.round(damage), color: options.zone ? "#cf73ff" : "#fff", life: 0.65, maxLife: 0.65 });
     if (target.health <= 0) this.eliminate(target, attacker);
@@ -437,6 +516,22 @@ export class BattleGame {
 
   eliminate(target, attacker) {
     if (!target.alive) return;
+    if (this.stage === "preparation" && target.isPlayer) {
+      target.health = 35;
+      target.x = 260;
+      target.y = WORLD.height / 2;
+      target.invulnerable = 2.5;
+      this.hooks.onFeed?.("你被裂隙领主击退，已在入口恢复 35 点生命");
+      return;
+    }
+    if (this.stage === "preparation" && target.isBoss) {
+      target.alive = false;
+      target.health = 0;
+      this.effects.push({ type: "death", x: target.x, y: target.y, color: "#f0b35b", life: 1.2, maxLife: 1.2 });
+      const reward = this.grantBossReward();
+      this.hooks.onFeed?.(`裂隙领主已被击败${reward ? `，${reward.name} 已装备` : ""}`);
+      return;
+    }
     target.alive = false;
     target.health = 0;
     if (attacker && attacker !== target) {
@@ -460,6 +555,10 @@ export class BattleGame {
 
   pickupNearest() {
     if (!this.player.alive) return;
+    if (this.stage === "preparation" && distance(this.player, this.portal) < 96) {
+      this.enterBattlefield("portal");
+      return;
+    }
     let nearestIndex = -1;
     let nearestDistance = Infinity;
     this.loot.forEach((item, index) => {
@@ -475,6 +574,10 @@ export class BattleGame {
   }
 
   updatePickupPrompt() {
+    if (this.stage === "preparation" && distance(this.player, this.portal) < 96) {
+      this.hooks.onPickup?.({ portal: true, item: { name: "进入主战场" }, key: displayKey(this.config.bindings.interact) });
+      return;
+    }
     const nearest = this.loot.filter((item) => distance(this.player, item) < 76).sort((a, b) => distance(this.player, a) - distance(this.player, b))[0];
     this.hooks.onPickup?.(nearest ? { item: nearest, key: displayKey(this.config.bindings.interact) } : null);
   }
@@ -527,12 +630,12 @@ export class BattleGame {
       { start: 155, end: 178, from: 350, to: 145, label: "决赛区收缩" },
       { start: 178, end: 230, from: 145, to: 55, label: "裂隙正在吞噬战场" },
     ];
-    const segment = timeline.find((item) => this.elapsed >= item.start && this.elapsed < item.end) || timeline[timeline.length - 1];
-    const progress = clamp((this.elapsed - segment.start) / (segment.end - segment.start), 0, 1);
+    const segment = timeline.find((item) => this.battleElapsed >= item.start && this.battleElapsed < item.end) || timeline[timeline.length - 1];
+    const progress = clamp((this.battleElapsed - segment.start) / (segment.end - segment.start), 0, 1);
     this.zone.radius = lerp(segment.from, segment.to, progress);
     this.zone.phase = timeline.indexOf(segment);
     this.zone.label = segment.label;
-    this.zone.timer = Math.max(0, segment.end - this.elapsed);
+    this.zone.timer = Math.max(0, segment.end - this.battleElapsed);
   }
 
   applyZoneDamage(entity, dt) {
@@ -553,12 +656,18 @@ export class BattleGame {
   }
 
   emitHud() {
+    const bossRatio = this.boss ? clamp(this.preparation.bossDamage / this.boss.maxHealth, 0, 1) : 0;
     this.hooks.onHud?.({
       health: this.player.health, maxHealth: this.player.maxHealth, shield: this.player.shield,
       career: this.player.career, skills: this.player.skills, cooldowns: this.player.cooldowns,
-      alive: this.entities.filter((entity) => entity.alive).length, kills: this.stats.kills,
+      stage: this.stage, alive: this.stage === "preparation" ? 1 : this.entities.filter((entity) => entity.alive).length, kills: this.stats.kills,
       weapon: this.player.gear.weapon, armor: this.player.gear.armor, potions: this.player.potions,
-      zoneLabel: this.zone.label, zoneTimer: formatTime(this.zone.timer), bindings: this.config.bindings,
+      zoneLabel: this.stage === "preparation" ? "独立发育阶段" : this.zone.label,
+      zoneTimer: formatTime(this.stage === "preparation" ? this.preparation.timer : this.zone.timer), bindings: this.config.bindings,
+      boss: this.stage === "preparation" ? {
+        alive: this.boss.alive, health: this.boss.health, maxHealth: this.boss.maxHealth,
+        contribution: bossRatio, reward: bossRatio >= 0.67 ? "史诗" : bossRatio >= 0.3 ? "稀有" : bossRatio > 0 ? "普通" : "未参与",
+      } : null,
     });
   }
 
@@ -578,24 +687,27 @@ export class BattleGame {
     ctx.save();
     ctx.translate(-this.camera.x, -this.camera.y);
     this.drawWorld(ctx);
+    if (this.stage === "preparation") this.drawPortal(ctx);
     this.drawLoot(ctx);
     this.drawProjectiles(ctx);
     this.entities.filter((entity) => entity.alive).sort((a, b) => a.y - b.y).forEach((entity) => this.drawFighter(ctx, entity));
     this.drawEffects(ctx);
-    this.drawZone(ctx);
+    if (this.stage === "battle") this.drawZone(ctx);
     ctx.restore();
     this.drawMinimap(ctx);
   }
 
   drawWorld(ctx) {
-    ctx.fillStyle = "#18201e";
+    ctx.fillStyle = this.stage === "preparation" ? "#1b1820" : "#18201e";
     ctx.fillRect(0, 0, WORLD.width, WORLD.height);
     ctx.strokeStyle = "rgba(187, 211, 194, .045)";
     ctx.lineWidth = 1;
     for (let x = 0; x <= WORLD.width; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD.height); ctx.stroke(); }
     for (let y = 0; y <= WORLD.height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD.width, y); ctx.stroke(); }
 
-    const patches = [[190,180,560,330,"#202925"],[1380,120,800,390,"#1d2522"],[180,1090,620,360,"#1c2625"],[1370,1050,820,390,"#222720"]];
+    const patches = this.stage === "preparation"
+      ? [[120,140,690,420,"#25202b"],[850,160,720,1220,"#241d27"],[1590,200,690,1200,"#1e222b"]]
+      : [[190,180,560,330,"#202925"],[1380,120,800,390,"#1d2522"],[180,1090,620,360,"#1c2625"],[1370,1050,820,390,"#222720"]];
     patches.forEach(([x, y, w, h, color]) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); });
 
     this.obstacles.forEach((rect) => {
@@ -609,6 +721,31 @@ export class BattleGame {
     ctx.strokeStyle = "rgba(240,180,91,.35)"; ctx.lineWidth = 4; ctx.strokeRect(3, 3, WORLD.width - 6, WORLD.height - 6);
   }
 
+  drawPortal(ctx) {
+    const pulse = 1 + Math.sin(this.elapsed * 3) * 0.08;
+    ctx.save();
+    ctx.translate(this.portal.x, this.portal.y);
+    ctx.scale(pulse, pulse);
+    ctx.shadowColor = "#54d7ee";
+    ctx.shadowBlur = 28;
+    ctx.strokeStyle = "rgba(96, 224, 244, .9)";
+    ctx.lineWidth = 7;
+    ctx.beginPath(); ctx.ellipse(0, 0, 48, 78, 0, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = "rgba(171, 112, 242, .75)";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(0, 0, 34, 62, 0, 0, TAU); ctx.stroke();
+    ctx.fillStyle = "rgba(78, 205, 235, .2)";
+    ctx.beginPath(); ctx.ellipse(0, 0, 31, 58, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = "rgba(230, 247, 255, .9)";
+    ctx.font = "700 13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("进入主战场", this.portal.x, this.portal.y - 96);
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = "rgba(230, 247, 255, .6)";
+    ctx.fillText("无需击败 Boss", this.portal.x, this.portal.y - 80);
+  }
+
   drawLoot(ctx) {
     this.loot.forEach((item) => {
       const pulse = 1 + Math.sin(this.elapsed * 4 + item.x) * 0.08;
@@ -620,6 +757,7 @@ export class BattleGame {
 
   drawFighter(ctx, entity) {
     ctx.save(); ctx.translate(entity.x, entity.y);
+    if (entity.isBoss) ctx.scale(1.55, 1.55);
     ctx.globalAlpha = entity.invulnerable > 0 && Math.floor(this.elapsed * 18) % 2 ? 0.45 : 1;
     ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(0, 17, 27, 11, 0, 0, TAU); ctx.fill();
     if (entity.shield > 0) { ctx.strokeStyle = "rgba(117,206,255,.7)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, -3, 31, 0, TAU); ctx.stroke(); }
@@ -634,10 +772,11 @@ export class BattleGame {
     ctx.fillStyle = "#fff"; ctx.font = "900 8px sans-serif"; ctx.textAlign = "center"; ctx.fillText(entity.career.mark, 0, 4);
     ctx.restore();
 
-    const barWidth = 52;
-    ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(entity.x - barWidth / 2, entity.y - 45, barWidth, 5);
-    ctx.fillStyle = entity.isPlayer ? "#57d59a" : "#e45154"; ctx.fillRect(entity.x - barWidth / 2, entity.y - 45, barWidth * clamp(entity.health / entity.maxHealth, 0, 1), 5);
-    ctx.fillStyle = "rgba(255,255,255,.72)"; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.fillText(entity.name, entity.x, entity.y - 51);
+    const barWidth = entity.isBoss ? 100 : 52;
+    const barY = entity.y - (entity.isBoss ? 76 : 45);
+    ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(entity.x - barWidth / 2, barY, barWidth, entity.isBoss ? 8 : 5);
+    ctx.fillStyle = entity.isPlayer ? "#57d59a" : entity.isBoss ? "#f0a34d" : "#e45154"; ctx.fillRect(entity.x - barWidth / 2, barY, barWidth * clamp(entity.health / entity.maxHealth, 0, 1), entity.isBoss ? 8 : 5);
+    ctx.fillStyle = "rgba(255,255,255,.82)"; ctx.font = entity.isBoss ? "700 13px sans-serif" : "10px sans-serif"; ctx.textAlign = "center"; ctx.fillText(entity.name, entity.x, barY - 6);
   }
 
   drawProjectiles(ctx) {
@@ -680,7 +819,11 @@ export class BattleGame {
   drawMinimap(ctx) {
     const w = 190; const h = 128; const x = 22; const y = 22; const sx = w / WORLD.width; const sy = h / WORLD.height;
     ctx.save(); ctx.fillStyle = "rgba(5,8,12,.78)"; ctx.fillRect(x, y, w, h); ctx.strokeStyle = "rgba(255,255,255,.15)"; ctx.strokeRect(x, y, w, h);
-    ctx.strokeStyle = "#bd5de6"; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(x + this.zone.x * sx, y + this.zone.y * sy, this.zone.radius * sx, this.zone.radius * sy, 0, 0, TAU); ctx.stroke();
+    if (this.stage === "battle") {
+      ctx.strokeStyle = "#bd5de6"; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(x + this.zone.x * sx, y + this.zone.y * sy, this.zone.radius * sx, this.zone.radius * sy, 0, 0, TAU); ctx.stroke();
+    } else {
+      ctx.fillStyle = "#5adbed"; ctx.beginPath(); ctx.arc(x + this.portal.x * sx, y + this.portal.y * sy, 3, 0, TAU); ctx.fill();
+    }
     this.entities.filter((entity) => entity.alive).forEach((entity) => { ctx.fillStyle = entity.isPlayer ? "#fff" : "#e25355"; ctx.beginPath(); ctx.arc(x + entity.x * sx, y + entity.y * sy, entity.isPlayer ? 3 : 1.8, 0, TAU); ctx.fill(); });
     ctx.fillStyle = "rgba(255,255,255,.5)"; ctx.font = "8px sans-serif"; ctx.fillText("战术地图", x + 7, y + h - 7); ctx.restore();
   }

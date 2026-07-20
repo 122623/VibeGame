@@ -49,10 +49,15 @@
         <canvas id="game-canvas" width="1280" height="720"></canvas>
         <div class="game-vignette"></div>
         <header class="hud-top">
-          <div class="alive-card"><span>存活</span><strong id="alive-count">12</strong></div>
+          <div class="alive-card"><span id="alive-label">存活</span><strong id="alive-count">12</strong></div>
           <div class="zone-card"><span id="zone-label">安全区稳定</span><strong id="zone-timer">00:45</strong></div>
           <div class="kill-card"><span>击败</span><strong id="kill-count">0</strong></div>
         </header>
+        <div id="boss-hud" class="boss-hud hidden">
+          <div class="boss-copy"><span>可选挑战 · 裂隙领主</span><strong id="boss-reward">未参与</strong></div>
+          <div class="boss-bar"><i id="boss-health-fill"></i><span id="boss-health-text">720 / 720</span></div>
+          <small>造成的伤害越高，进入主战场时获得的装备品质越好</small>
+        </div>
         <aside class="player-hud">
           <div class="avatar" id="hud-avatar">剑</div>
           <div class="player-bars">

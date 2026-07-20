@@ -186,6 +186,7 @@ async function startGame() {
 
 function updateHud(state) {
   $("#alive-count").textContent = state.alive;
+  $("#alive-label").textContent = state.stage === "preparation" ? "发育区" : "存活";
   $("#kill-count").textContent = state.kills;
   $("#zone-label").textContent = state.zoneLabel;
   $("#zone-timer").textContent = state.zoneTimer;
@@ -197,6 +198,14 @@ function updateHud(state) {
   $("#health-text").textContent = `${Math.ceil(state.health)} / ${state.maxHealth}${state.shield > 0 ? ` + ${Math.ceil(state.shield)}` : ""}`;
   $("#weapon-text").textContent = state.weapon?.name || "训练长剑";
   $("#armor-text").textContent = `${state.armor?.name || "无防具"} · 药剂 ${state.potions}`;
+
+  const bossHud = $("#boss-hud");
+  bossHud.classList.toggle("hidden", !state.boss);
+  if (state.boss) {
+    $("#boss-health-fill").style.width = `${Math.max(0, state.boss.health / state.boss.maxHealth * 100)}%`;
+    $("#boss-health-text").textContent = state.boss.alive ? `${Math.ceil(state.boss.health)} / ${state.boss.maxHealth}` : "已击败";
+    $("#boss-reward").textContent = `贡献 ${Math.round(state.boss.contribution * 100)}% · ${state.boss.reward}奖励`;
+  }
 
   const skillHud = $("#skill-hud");
   if (skillHud.children.length !== 4) {
@@ -224,7 +233,9 @@ function addFeed(message) {
 function updatePickup(payload) {
   const prompt = $("#pickup-prompt");
   prompt.classList.toggle("hidden", !payload);
-  if (payload) prompt.innerHTML = `<b>${payload.key}</b> 拾取 ${payload.item.name}`;
+  if (payload) prompt.innerHTML = payload.portal
+    ? `<b>${payload.key}</b> ${payload.item.name}`
+    : `<b>${payload.key}</b> 拾取 ${payload.item.name}`;
 }
 
 function showResult(result) {

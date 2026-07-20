@@ -124,6 +124,15 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 .zone-card { min-width: 180px !important; }
 .zone-card strong { color: var(--gold); }
 
+.boss-hud { position: absolute; top: 92px; left: 50%; width: 390px; padding: 11px 14px; transform: translateX(-50%); border: 1px solid rgba(240,179,91,.28); background: rgba(12,10,14,.84); backdrop-filter: blur(8px); }
+.boss-copy { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.boss-copy span { color: #d6c4ae; font-size: 10px; }
+.boss-copy strong { color: var(--gold); font-size: 10px; }
+.boss-bar { position: relative; height: 13px; overflow: hidden; background: #281b17; }
+.boss-bar i { position: absolute; inset: 0 auto 0 0; width: 100%; background: linear-gradient(90deg, #bd623b, #f0aa4d); transition: width .15s; }
+.boss-bar span { position: relative; display: block; color: #fff; font-size: 8px; line-height: 13px; text-align: center; text-shadow: 0 1px 2px #000; }
+.boss-hud small { display: block; margin-top: 6px; color: #81766f; font-size: 8px; text-align: center; }
+
 .player-hud { position: absolute; left: 24px; bottom: 28px; display: flex; gap: 11px; align-items: center; width: 310px; padding: 11px; border: 1px solid rgba(255,255,255,.12); background: rgba(7,10,15,.82); backdrop-filter: blur(8px); }
 .avatar { display: grid; place-items: center; width: 50px; height: 50px; color: #fff; font-size: 18px; font-weight: 900; background: linear-gradient(140deg, #812f36, #1a202b); border: 1px solid rgba(255,255,255,.18); }
 .player-bars { flex: 1; }
