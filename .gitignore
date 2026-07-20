@@ -1,5 +1,7 @@
 .data/
 .artifacts/
+.npm-cache/
+dist/
 assets/dnf/*
 !assets/dnf/.gitkeep
 node_modules/

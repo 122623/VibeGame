@@ -102,6 +102,7 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 .primary-button, .secondary-button, .text-button { border: 0; color: white; cursor: pointer; transition: .18s ease; }
 .primary-button { padding: 15px 26px; background: linear-gradient(135deg, var(--accent), #b83239); box-shadow: 0 10px 28px rgba(210,56,56,.2); font-weight: 800; }
 .primary-button:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(210,56,56,.35); }
+.primary-button:disabled { opacity: .58; cursor: wait; transform: none; box-shadow: none; }
 .secondary-button { padding: 8px 12px; background: #273243; font-size: 10px; }
 .secondary-button:hover { background: #344256; }
 .text-button { padding: 8px 4px; color: #9ca8b7; background: none; font-size: 10px; }
@@ -115,7 +116,8 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 .launch-bar .primary-button span { float: right; margin-left: 24px; }
 
 .game-screen { position: relative; height: 100vh; min-height: 620px; overflow: hidden; background: #080b0d; }
-#game-canvas { display: block; width: 100%; height: 100%; }
+#game-root { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
+#game-root canvas { display: block; width: 100% !important; height: 100% !important; }
 .game-vignette { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 160px rgba(0,0,0,.72); }
 .hud-top { position: absolute; top: 22px; left: 50%; display: flex; gap: 8px; transform: translateX(-50%); }
 .hud-top > div { min-width: 90px; padding: 8px 14px; border: 1px solid rgba(255,255,255,.11); background: rgba(7,10,15,.78); backdrop-filter: blur(8px); text-align: center; }
@@ -157,11 +159,15 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 .feed-item { padding: 6px 10px; color: #cbd1db; background: rgba(8,11,15,.72); border-right: 2px solid var(--accent); font-size: 9px; animation: feed-in .2s ease; }
 @keyframes feed-in { from { opacity: 0; transform: translateX(8px); } }
 
-.pause-panel { position: absolute; inset: 0; z-index: 10; display: grid; place-content: center; justify-items: center; background: rgba(4,6,9,.82); backdrop-filter: blur(8px); }
-.pause-panel > span { color: var(--accent-bright); font-size: 10px; font-weight: 800; letter-spacing: .25em; }
-.pause-panel h2 { margin: 9px 0 25px; font-size: 38px; }
+.pause-panel, .connection-panel { position: absolute; inset: 0; z-index: 10; display: grid; place-content: center; justify-items: center; background: rgba(4,6,9,.82); backdrop-filter: blur(8px); }
+.pause-panel > span, .connection-panel > span { color: var(--accent-bright); font-size: 10px; font-weight: 800; letter-spacing: .25em; }
+.pause-panel h2, .connection-panel h2 { margin: 9px 0 12px; font-size: 38px; }
+.pause-panel p, .connection-panel p { max-width: 420px; margin: 0 0 25px; color: var(--muted); font-size: 11px; text-align: center; }
 .pause-panel .primary-button { min-width: 210px; }
 .pause-panel .text-button { margin-top: 10px; }
+.connection-panel { z-index: 11; }
+.connection-panel > span { color: var(--cyan); }
+.connection-panel .text-button { margin-top: 4px; }
 
 .result-screen { display: grid; place-items: center; padding: 40px; background: radial-gradient(circle at center, rgba(92,32,35,.26), transparent 38%), #080b11; }
 .result-card { width: min(720px, 90vw); padding: 54px; border: 1px solid var(--line); background: rgba(15,19,27,.94); text-align: center; box-shadow: 0 30px 100px rgba(0,0,0,.45); }

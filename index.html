@@ -46,7 +46,7 @@
       </section>
 
       <section id="game-screen" class="screen game-screen hidden">
-        <canvas id="game-canvas" width="1280" height="720"></canvas>
+        <div id="game-root" aria-label="裂隙战场游戏画面"></div>
         <div class="game-vignette"></div>
         <header class="hud-top">
           <div class="alive-card"><span id="alive-label">存活</span><strong id="alive-count">12</strong></div>
@@ -67,11 +67,17 @@
           </div>
         </aside>
         <div id="skill-hud" class="skill-hud"></div>
-        <div class="help-hud"><span>方向键移动</span><span>J / 左键普攻</span><span>F 拾取</span><span>1 药剂</span><span>ESC 暂停</span></div>
+        <div class="help-hud"><span>方向键移动</span><span>J / 左键普攻</span><span>F 拾取</span><span>1 药剂</span><span>ESC 对局菜单</span></div>
         <div id="pickup-prompt" class="pickup-prompt hidden"></div>
         <div id="feed" class="feed"></div>
+        <div id="connection-panel" class="connection-panel hidden" role="status" aria-live="polite">
+          <span>CONNECTING</span>
+          <h2 id="connection-title">正在连接战场</h2>
+          <p id="connection-message">正在加入 Colyseus 对局，请稍候……</p>
+          <button id="cancel-connection" class="text-button">取消并返回大厅</button>
+        </div>
         <div id="pause-panel" class="pause-panel hidden">
-          <span>GAME PAUSED</span><h2>战斗暂停</h2><button id="resume-game" class="primary-button">继续战斗</button><button id="quit-game" class="text-button">返回大厅</button>
+          <span>MATCH MENU</span><h2>对局菜单</h2><p>对局仍在服务器继续进行，角色不会进入暂停状态。</p><button id="resume-game" class="primary-button">返回战斗</button><button id="quit-game" class="text-button">退出对局并返回大厅</button>
         </div>
       </section>
 
@@ -91,6 +97,6 @@
         </div>
       </section>
     </main>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
