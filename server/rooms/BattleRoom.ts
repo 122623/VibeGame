@@ -4,15 +4,19 @@ import {
   isActionMessage,
   isInputMessage,
   type ActionMessage,
+  type AnimationCueMessage,
   type EffectMessage,
   type FeedMessage,
   type JoinOptions,
   type MatchEndMessage,
+  type SpectateMessage,
 } from "../../src/shared/protocol.js";
 import { BattleSimulation } from "../game/BattleSimulation.js";
 import { BattleState } from "../state/BattleState.js";
 
 const FIXED_TIME_STEP = 1000 / 60;
+type ServerMessageType = "feed" | "animation" | "effect" | "matchEnd" | "spectate";
+type ServerMessage = AnimationCueMessage | FeedMessage | EffectMessage | MatchEndMessage | SpectateMessage;
 
 /** Accept the short-lived client prototype aliases while keeping type/index as the public protocol. */
 function normalizeAction(payload: unknown): ActionMessage | undefined {
@@ -34,6 +38,8 @@ export class BattleRoom extends Room {
 
   private simulation!: BattleSimulation;
   private roomLockRequested = false;
+  private readonly readyClients = new Set<string>();
+  private readonly pendingMessages = new Map<string, Array<{ type: ServerMessageType; message: ServerMessage }>>();
 
   messages = {
     input: (client: Client, payload: unknown) => {
@@ -46,6 +52,7 @@ export class BattleRoom extends Room {
         this.syncClientViews();
       }
     },
+    ready: (client: Client) => this.markClientReady(client),
   };
 
   onCreate(): void {
@@ -53,8 +60,10 @@ export class BattleRoom extends Room {
       state: this.state,
       events: {
         feed: (message, targetPlayerId) => this.sendFeed(message, targetPlayerId),
+        animation: (message) => this.sendAnimation(message),
         effect: (message) => this.sendEffect(message),
         matchEnd: (message, targetPlayerId) => this.sendMatchEnd(message, targetPlayerId),
+        spectate: (message, targetPlayerId) => this.sendSpectate(message, targetPlayerId),
       },
     });
 
@@ -71,11 +80,14 @@ export class BattleRoom extends Room {
 
   onJoin(client: Client, options: JoinOptions): void {
     client.view = new StateView();
+    this.pendingMessages.set(client.sessionId, []);
     this.simulation.addPlayer(client.sessionId, options);
     this.syncClientViews();
   }
 
   onLeave(client: Client): void {
+    this.readyClients.delete(client.sessionId);
+    this.pendingMessages.delete(client.sessionId);
     this.simulation.removePlayer(client.sessionId);
   }
 
@@ -86,13 +98,14 @@ export class BattleRoom extends Room {
   private sendFeed(message: FeedMessage, targetPlayerId?: string): void {
     const ownerId = message.ownerId ?? "";
     if (ownerId) {
-      this.clientById(ownerId)?.send("feed", message);
+      const owner = this.clientById(ownerId);
+      if (owner) this.sendClient(owner, "feed", message);
       return;
     }
 
     if (targetPlayerId) {
       const target = this.clientById(targetPlayerId);
-      if (target && this.isBattleClient(target)) target.send("feed", message);
+      if (target && this.isBattleClient(target)) this.sendClient(target, "feed", message);
       return;
     }
 
@@ -102,22 +115,57 @@ export class BattleRoom extends Room {
   private sendEffect(message: EffectMessage): void {
     const ownerId = message.ownerId ?? "";
     if (ownerId) {
-      this.clientById(ownerId)?.send("effect", message);
+      const owner = this.clientById(ownerId);
+      if (owner) this.sendClient(owner, "effect", message);
       return;
     }
 
     this.sendToBattleClients("effect", message);
   }
 
+  private sendAnimation(message: AnimationCueMessage): void {
+    const ownerId = message.ownerId ?? "";
+    if (ownerId) {
+      const owner = this.clientById(ownerId);
+      if (owner) this.sendClient(owner, "animation", message);
+      return;
+    }
+
+    this.sendToBattleClients("animation", message);
+  }
+
   private sendMatchEnd(message: MatchEndMessage, targetPlayerId?: string): void {
     this.requestRoomLock();
     if (targetPlayerId) {
       const target = this.clientById(targetPlayerId);
-      if (target && this.isBattleClient(target)) target.send("matchEnd", message);
+      if (target && this.isBattleClient(target)) this.sendClient(target, "matchEnd", message);
       return;
     }
 
     this.sendToBattleClients("matchEnd", message);
+  }
+
+  private sendSpectate(message: SpectateMessage, targetPlayerId: string): void {
+    const target = this.clientById(targetPlayerId);
+    if (target && this.isBattleClient(target)) this.sendClient(target, "spectate", message);
+  }
+
+  private markClientReady(client: Client): void {
+    if (this.readyClients.has(client.sessionId)) return;
+    this.readyClients.add(client.sessionId);
+    const pending = this.pendingMessages.get(client.sessionId) ?? [];
+    this.pendingMessages.delete(client.sessionId);
+    for (const item of pending) client.send(item.type, item.message);
+  }
+
+  private sendClient(client: Client, type: ServerMessageType, message: ServerMessage): void {
+    if (this.readyClients.has(client.sessionId)) {
+      client.send(type, message);
+      return;
+    }
+    const pending = this.pendingMessages.get(client.sessionId) ?? [];
+    pending.push({ type, message });
+    this.pendingMessages.set(client.sessionId, pending.slice(-40));
   }
 
   private clientById(sessionId: string): Client | undefined {
@@ -137,6 +185,7 @@ export class BattleRoom extends Room {
     this.syncCollectionView(clientView, this.state.entities.values(), visibleOwnerId);
     this.syncCollectionView(clientView, this.state.loot.values(), visibleOwnerId);
     this.syncCollectionView(clientView, this.state.projectiles.values(), visibleOwnerId);
+    this.syncCollectionView(clientView, this.state.inventory.values(), client.sessionId);
   }
 
   private syncCollectionView<T extends Schema & { ownerId: string }>(view: StateView, items: Iterable<T>, visibleOwnerId: string): void {
@@ -152,9 +201,12 @@ export class BattleRoom extends Room {
     return player?.kind === "player" && player.stage === "battle" && player.ownerId === "";
   }
 
-  private sendToBattleClients(type: "feed" | "effect" | "matchEnd", message: FeedMessage | EffectMessage | MatchEndMessage): void {
+  private sendToBattleClients(
+    type: "feed" | "animation" | "effect" | "matchEnd",
+    message: AnimationCueMessage | FeedMessage | EffectMessage | MatchEndMessage,
+  ): void {
     for (const client of this.clients) {
-      if (this.isBattleClient(client)) client.send(type, message);
+      if (this.isBattleClient(client)) this.sendClient(client, type, message);
     }
   }
 

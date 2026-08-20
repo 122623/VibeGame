@@ -2,12 +2,14 @@ import { CAREERS, getCareer, getSkill } from "../../src/config.js";
 import {
   BATTLE,
   BATTLE_OBSTACLES,
+  INVENTORY_CAPACITY,
   PORTAL,
   PREPARATION,
   PREPARATION_OBSTACLES,
   WORLD,
   ZONE_TIMELINE,
   type ActionMessage,
+  type AnimationCueMessage,
   type EffectMessage,
   type FeedMessage,
   type InputMessage,
@@ -15,15 +17,15 @@ import {
   type LootKind,
   type LootQuality,
   type MatchEndMessage,
+  type SpectateMessage,
   type WorldObstacle,
 } from "../../src/shared/protocol.js";
-import { BattleState, EntityState, LootState, ProjectileState } from "../state/BattleState.js";
+import { BattleState, EntityState, InventoryItemState, LootState, ProjectileState } from "../state/BattleState.js";
 
 const TAU = Math.PI * 2;
 const BOT_NAMES = ["夜雨", "赤刃", "无名", "白鸦", "北辰", "铁锤", "灰烬", "零度", "残月", "断弦", "渡鸦"];
 const WEAPONS = ["旧制长剑", "裂纹太刀", "军团巨刃", "波动短剑"];
 const ARMORS = ["皮革护肩", "战术胸甲", "鬼纹长袍", "合金护甲"];
-
 interface QualityDefinition {
   name: LootQuality;
   color: string;
@@ -49,12 +51,15 @@ interface DamageOptions {
   knockback?: number;
   slow?: number;
   zone?: boolean;
+  actionId?: string;
 }
 
 export interface SimulationEvents {
   feed?: (message: FeedMessage, targetPlayerId?: string) => void;
+  animation?: (message: AnimationCueMessage) => void;
   effect?: (message: EffectMessage) => void;
   matchEnd?: (message: MatchEndMessage, targetPlayerId?: string) => void;
+  spectate?: (message: SpectateMessage, targetPlayerId: string) => void;
 }
 
 export interface BattleSimulationOptions {
@@ -107,6 +112,8 @@ export class BattleSimulation {
   private readonly zoneDamageTimers = new Map<string, number>();
   private readonly projectileHits = new Map<string, Set<string>>();
   private readonly resultSent = new Set<string>();
+  private readonly pendingResults = new Map<string, MatchEndMessage>();
+  private readonly bossAggroPlayers = new Set<string>();
   private battlefieldStarted = false;
   private matchFinished = false;
   private serial = 0;
@@ -142,7 +149,7 @@ export class BattleSimulation {
     const bossCareer = CAREERS[0];
     const boss = this.createEntity({
       id: this.bossId(playerId),
-      name: "裂隙领主",
+      name: "牛头械王",
       kind: "boss",
       ownerId: playerId,
       stage: "preparation",
@@ -177,9 +184,12 @@ export class BattleSimulation {
     this.cleanupRealm(playerId, playerId);
     this.state.entities.delete(playerId);
     this.controls.delete(playerId);
+    this.clearInventory(playerId);
     this.rewardedPlayers.delete(playerId);
     this.zoneDamageTimers.delete(playerId);
     this.resultSent.delete(playerId);
+    this.pendingResults.delete(playerId);
+    this.bossAggroPlayers.delete(playerId);
     this.updateAliveCount();
   }
 
@@ -213,8 +223,14 @@ export class BattleSimulation {
         return this.interact(player);
       case "dodge":
         return this.dodge(player);
+      case "jump":
+        return this.jump(player);
       case "potion":
         return this.usePotion(player);
+      case "equip":
+        return this.equipInventoryItem(player, action.itemId ?? "");
+      case "drop":
+        return this.dropInventoryItem(player, action.itemId ?? "");
       default:
         return false;
     }
@@ -304,6 +320,7 @@ export class BattleSimulation {
     if (attacker && attacker.id !== target.id) {
       attacker.damage += totalDamage;
       if (target.kind === "boss" && attacker.kind === "player") {
+        this.bossAggroPlayers.add(attacker.id);
         attacker.bossDamage = Math.min(target.maxHealth, attacker.bossDamage + healthDamage);
         this.updateRewardQuality(attacker, target.maxHealth);
       }
@@ -317,14 +334,18 @@ export class BattleSimulation {
 
     this.events.effect?.({
       type: "damage",
+      sourceId: attacker?.id,
+      targetId: target.id,
+      actionId: options.actionId,
       x: target.x,
       y: target.y,
+      angle: attacker ? Math.atan2(target.y - attacker.y, target.x - attacker.x) : undefined,
       text: String(Math.round(totalDamage)),
       color: options.zone ? "#c35dec" : "#ffffff",
       ownerId: target.ownerId,
     });
 
-    if (target.health <= 0) this.eliminate(target, attacker, options.zone === true);
+    if (target.health <= 0) this.eliminate(target, attacker, options.zone === true, options.actionId);
     return totalDamage;
   }
 
@@ -362,17 +383,20 @@ export class BattleSimulation {
     const dx = player.x - boss.x;
     const dy = player.y - boss.y;
     const length = Math.hypot(dx, dy) || 1;
+    if (length > 360 && !this.bossAggroPlayers.has(player.id)) return;
     boss.angle = Math.atan2(dy, dx);
     if (length > 100) this.moveEntity(boss, (dx / length) * boss.speed * dt, (dy / length) * boss.speed * dt);
     if (length <= 112 && boss.attackCooldown <= 0) {
       boss.attackCooldown = 1.25;
-      this.damageEntity(player.id, 13, boss.id, { knockback: 35 });
-      this.emitEffect("slash", boss, "#f0a34d", 80);
+      this.emitAnimationCue(boss, "basic-attack", "attack");
+      this.emitEffect("slash", boss, "#f0a34d", 80, "basic-attack");
+      this.damageEntity(player.id, 13, boss.id, { knockback: 35, actionId: "basic-attack" });
     }
     if (length <= 180 && boss.cooldown0 <= 0) {
       boss.cooldown0 = 5;
-      this.damageEntity(player.id, 20, boss.id, { knockback: 65, slow: 0.35 });
-      this.emitEffect("ring", boss, "#d86b4f", 180);
+      this.emitAnimationCue(boss, "boss-smash");
+      this.emitEffect("ring", boss, "#d86b4f", 180, "boss-smash");
+      this.damageEntity(player.id, 20, boss.id, { knockback: 65, slow: 0.35, actionId: "boss-smash" });
     }
   }
 
@@ -403,6 +427,8 @@ export class BattleSimulation {
     entity.cooldown3 = Math.max(0, entity.cooldown3 - dt);
     entity.attackCooldown = Math.max(0, entity.attackCooldown - dt);
     entity.dodgeCooldown = Math.max(0, entity.dodgeCooldown - dt);
+    entity.jumpTime = Math.max(0, entity.jumpTime - dt);
+    entity.jumpCooldown = Math.max(0, entity.jumpCooldown - dt);
     entity.invulnerable = Math.max(0, entity.invulnerable - dt);
     entity.buffTime = Math.max(0, entity.buffTime - dt);
     entity.slowTime = Math.max(0, entity.slowTime - dt);
@@ -411,15 +437,16 @@ export class BattleSimulation {
   private basicAttack(attacker: EntityState): boolean {
     if (!attacker.alive || attacker.attackCooldown > 0) return false;
     attacker.attackCooldown = attacker.kind === "boss" ? 1.2 : 0.52;
+    this.emitAnimationCue(attacker, "basic-attack", "attack");
     const damage = (13 + attacker.weaponPower * 1.1) * (attacker.buffTime > 0 ? 1.25 : 1);
     const range = attacker.kind === "boss" ? 125 : 105;
+    this.emitEffect("slash", attacker, attacker.color, range, "basic-attack");
     for (const target of this.targetsFor(attacker)) {
       if (distance(attacker, target) > range + target.radius) continue;
       const targetAngle = Math.atan2(target.y - attacker.y, target.x - attacker.x);
       if (Math.abs(angleDifference(targetAngle, attacker.angle)) > 1.05) continue;
-      this.damageEntity(target.id, damage, attacker.id, { knockback: 38 });
+      this.damageEntity(target.id, damage, attacker.id, { knockback: 38, actionId: "basic-attack" });
     }
-    this.emitEffect("slash", attacker, attacker.color, range);
     return true;
   }
 
@@ -433,22 +460,23 @@ export class BattleSimulation {
     const skill = getSkill(career, skillId);
     if (!skill) return false;
     attacker[cooldownKey] = Number(skill.cooldown) || 1;
+    this.emitAnimationCue(attacker, skillId);
     const baseDamage = (Number(skill.damage) + attacker.weaponPower * 0.8) * (attacker.buffTime > 0 ? 1.25 : 1);
     const range = Number(skill.range) || 0;
     const color = String(skill.color || attacker.color);
 
     if (skill.kind === "shield") {
       attacker.shield = Math.min(120, attacker.shield + Number(skill.shield || 45));
-      this.emitEffect("shield", attacker, color, 52);
+      this.emitEffect("shield", attacker, color, 52, skillId);
       return true;
     }
     if (skill.kind === "buff") {
       attacker.buffTime = Number(skill.duration || 8);
-      this.emitEffect("buff", attacker, color, 58);
+      this.emitEffect("buff", attacker, color, 58, skillId);
       return true;
     }
     if (skill.kind === "projectile") {
-      this.spawnProjectile(attacker, baseDamage, range || 500, color, Boolean(skill.pierce), Number(skill.slow || 0));
+      this.spawnProjectile(attacker, skillId, baseDamage, range || 500, color, Boolean(skill.pierce), Number(skill.slow || 0));
       return true;
     }
     if (skill.kind === "dash") {
@@ -458,14 +486,17 @@ export class BattleSimulation {
       const end = { x: attacker.x, y: attacker.y };
       attacker.invulnerable = Math.max(attacker.invulnerable, 0.22);
       for (const target of this.targetsFor(attacker)) {
-        if (pointSegmentDistance(target, start, end) <= target.radius + 30) this.damageEntity(target.id, baseDamage, attacker.id, { knockback: 55 });
+        if (pointSegmentDistance(target, start, end) <= target.radius + 30) {
+          this.damageEntity(target.id, baseDamage, attacker.id, { knockback: 55, actionId: skillId });
+        }
       }
-      this.events.effect?.({ type: "dash", x: start.x, y: start.y, radius: dashDistance, angle: attacker.angle, color, ownerId: attacker.ownerId });
+      this.events.effect?.({ type: "dash", sourceId: attacker.id, actionId: skillId, x: start.x, y: start.y, radius: dashDistance, angle: attacker.angle, color, ownerId: attacker.ownerId });
       return true;
     }
 
     const radius = range || (skill.kind === "melee" ? 110 : 165);
     const multiplier = skill.kind === "nova" ? Math.max(1, Number(skill.pulses || 3) * 0.65) : 1;
+    this.emitEffect(skill.kind === "melee" ? "skillSlash" : "ring", attacker, color, radius, skillId);
     for (const target of this.targetsFor(attacker)) {
       if (distance(attacker, target) > radius + target.radius) continue;
       if (skill.kind === "melee") {
@@ -475,10 +506,10 @@ export class BattleSimulation {
       const dealt = this.damageEntity(target.id, baseDamage * multiplier, attacker.id, {
         knockback: Number(skill.knockback || 0),
         slow: Number(skill.slow || 0),
+        actionId: skillId,
       });
       if (dealt > 0 && skill.lifesteal) attacker.health = Math.min(attacker.maxHealth, attacker.health + dealt * Number(skill.lifesteal));
     }
-    this.emitEffect(skill.kind === "melee" ? "skillSlash" : "ring", attacker, color, radius);
     return true;
   }
 
@@ -488,8 +519,18 @@ export class BattleSimulation {
     entity.invulnerable = 0.38;
     const startX = entity.x;
     const startY = entity.y;
+    this.emitAnimationCue(entity, "dodge");
     this.moveEntity(entity, Math.cos(entity.angle) * 125, Math.sin(entity.angle) * 125);
-    this.events.effect?.({ type: "dash", x: startX, y: startY, radius: 125, angle: entity.angle, color: "#d7e5ef", ownerId: entity.ownerId });
+    this.events.effect?.({ type: "dash", sourceId: entity.id, actionId: "dodge", x: startX, y: startY, radius: 125, angle: entity.angle, color: "#d7e5ef", ownerId: entity.ownerId });
+    return true;
+  }
+
+  private jump(entity: EntityState): boolean {
+    if (entity.jumpCooldown > 0 || entity.jumpTime > 0) return false;
+    entity.jumpTime = 1.2;
+    entity.jumpCooldown = 1.5;
+    entity.invulnerable = Math.max(entity.invulnerable, 0.12);
+    this.emitEffect("jump", entity, "#d7e5ef", 36);
     return true;
   }
 
@@ -521,25 +562,76 @@ export class BattleSimulation {
     }
     if (!nearest) return false;
 
-    if (nearest.type === "weapon") {
+    if (nearest.type === "potion") {
+      entity.potions = Math.min(9, entity.potions + nearest.amount);
+    } else if (entity.kind === "player") {
+      if (!this.collectEquipment(entity, nearest)) return false;
+    } else if (nearest.type === "weapon") {
       entity.weaponName = nearest.name;
       entity.weaponPower = nearest.value;
-    } else if (nearest.type === "armor") {
+    } else {
       entity.armorName = nearest.name;
       entity.armorPower = nearest.value;
-    } else {
-      entity.potions = Math.min(9, entity.potions + nearest.amount);
     }
     this.state.loot.delete(nearest.id);
     this.emitFeed(`获得 ${nearest.name}`, "good", entity.ownerId, entity.kind === "player" ? entity.id : undefined);
     return true;
   }
 
-  private spawnProjectile(source: EntityState, damage: number, range: number, color: string, pierce: boolean, slow: number): void {
+  private collectEquipment(player: EntityState, loot: LootState): boolean {
+    const emptySlot = loot.type === "weapon" ? player.weaponPower <= 0 : player.armorPower <= 0;
+    if (emptySlot) {
+      this.applyEquipment(player, loot);
+      return true;
+    }
+    if (this.inventoryItems(player.id).length >= INVENTORY_CAPACITY) {
+      this.emitFeed("背包已满，请先装备或丢弃一件物品。", "danger", player.ownerId, player.id);
+      return false;
+    }
+    const item = this.inventoryItemFromLoot(player.id, loot);
+    this.state.inventory.set(item.id, item);
+    return true;
+  }
+
+  private equipInventoryItem(player: EntityState, itemId: string): boolean {
+    const item = this.state.inventory.get(itemId);
+    if (!item || item.ownerId !== player.id || (item.type !== "weapon" && item.type !== "armor")) return false;
+
+    const previous = item.type === "weapon"
+      ? { name: player.weaponName, value: player.weaponPower }
+      : { name: player.armorName, value: player.armorPower };
+    const equippedName = item.name;
+    this.applyEquipment(player, item);
+
+    if (previous.value > 0) {
+      const quality = this.qualityFromValue(previous.value, item.type === "weapon" ? 8 : 6);
+      item.name = previous.name;
+      item.value = previous.value;
+      item.quality = quality.name;
+      item.color = quality.color;
+    } else {
+      this.state.inventory.delete(item.id);
+    }
+    this.emitFeed(`已装备 ${equippedName}`, "good", player.ownerId, player.id);
+    return true;
+  }
+
+  private dropInventoryItem(player: EntityState, itemId: string): boolean {
+    const item = this.state.inventory.get(itemId);
+    if (!item || item.ownerId !== player.id) return false;
+    const loot = this.lootFromInventory(item, player.ownerId, player.x, player.y + player.radius + 14);
+    this.state.inventory.delete(item.id);
+    this.state.loot.set(loot.id, loot);
+    this.emitFeed(`已丢弃 ${item.name}`, "info", player.ownerId, player.id);
+    return true;
+  }
+
+  private spawnProjectile(source: EntityState, actionId: string, damage: number, range: number, color: string, pierce: boolean, slow: number): void {
     const projectile = new ProjectileState();
     projectile.id = this.nextId("projectile");
     projectile.ownerId = source.ownerId;
     projectile.sourceId = source.id;
+    projectile.actionId = actionId;
     projectile.x = source.x + Math.cos(source.angle) * (source.radius + 12);
     projectile.y = source.y + Math.sin(source.angle) * (source.radius + 12);
     projectile.vx = Math.cos(source.angle) * 620;
@@ -551,7 +643,7 @@ export class BattleSimulation {
     projectile.slow = slow;
     this.state.projectiles.set(projectile.id, projectile);
     this.projectileHits.set(projectile.id, new Set());
-    this.events.effect?.({ type: "projectile", x: projectile.x, y: projectile.y, angle: source.angle, color, ownerId: source.ownerId });
+    this.events.effect?.({ type: "projectile", sourceId: source.id, actionId, x: projectile.x, y: projectile.y, angle: source.angle, color, ownerId: source.ownerId });
   }
 
   private updateProjectiles(dt: number): void {
@@ -585,7 +677,11 @@ export class BattleSimulation {
       for (const target of this.targetsFor(source)) {
         if (hits.has(target.id) || distance(projectile, target) > projectile.radius + target.radius) continue;
         hits.add(target.id);
-        this.damageEntity(target.id, projectile.damage, source.id, { knockback: 40, slow: projectile.slow });
+        this.damageEntity(target.id, projectile.damage, source.id, {
+          knockback: 40,
+          slow: projectile.slow,
+          actionId: projectile.actionId,
+        });
         if (!projectile.pierce) {
           removals.push(projectile.id);
           break;
@@ -599,13 +695,23 @@ export class BattleSimulation {
     }
   }
 
-  private eliminate(target: EntityState, attacker?: EntityState, fromZone = false): void {
+  private eliminate(target: EntityState, attacker?: EntityState, fromZone = false, actionId?: string): void {
     if (target.kind === "player" && target.stage === "preparation") {
       target.health = Math.max(1, target.maxHealth * 0.7);
       target.shield = 0;
       target.x = PREPARATION.spawnX;
       target.y = PREPARATION.spawnY;
       target.invulnerable = 2;
+      target.jumpTime = 0;
+      this.bossAggroPlayers.delete(target.id);
+      const boss = this.state.entities.get(this.bossId(target.id));
+      if (boss?.alive) {
+        boss.x = PREPARATION.bossX;
+        boss.y = PREPARATION.bossY;
+        boss.angle = Math.PI;
+        boss.attackCooldown = 1.5;
+        boss.cooldown0 = 4;
+      }
       this.emitFeed("你在发育区倒下，被送回入口并恢复了部分生命。", "danger", target.ownerId, target.id);
       return;
     }
@@ -624,18 +730,35 @@ export class BattleSimulation {
       this.dropEquipment(target);
       const killerName = attacker && attacker.id !== target.id ? attacker.name : fromZone ? "危险区" : "未知力量";
       this.emitFeed(`${killerName} 击败了 ${target.name}`, "danger", target.ownerId);
-      if (target.kind === "player" && !this.resultSent.has(target.id)) {
-        this.resultSent.add(target.id);
-        this.events.matchEnd?.({
+      if (target.kind === "player" && !this.pendingResults.has(target.id)) {
+        const result = {
           victory: false,
           rank: this.countPublicAlive() + 1,
           kills: target.kills,
           damage: Math.round(target.damage),
           time: this.state.battleElapsed,
+        } satisfies MatchEndMessage;
+        this.pendingResults.set(target.id, result);
+        const spectateTarget = this.nearestPublicSurvivor(target);
+        this.events.spectate?.({
+          targetId: spectateTarget?.id,
+          targetName: spectateTarget?.name,
+          rank: result.rank,
         }, target.id);
       }
     }
-    this.events.effect?.({ type: "death", x: target.x, y: target.y, color: target.color, radius: 90, ownerId: target.ownerId });
+    this.events.effect?.({
+      type: "death",
+      sourceId: attacker?.id,
+      targetId: target.id,
+      actionId,
+      x: target.x,
+      y: target.y,
+      angle: attacker ? Math.atan2(target.y - attacker.y, target.x - attacker.x) : undefined,
+      color: target.color,
+      radius: 90,
+      ownerId: target.ownerId,
+    });
   }
 
   private grantBossReward(player: EntityState): LootState | undefined {
@@ -645,23 +768,10 @@ export class BattleSimulation {
     const quality = ratio >= 0.67 ? QUALITIES[2] : ratio >= 0.3 ? QUALITIES[1] : QUALITIES[0];
     const type: LootKind = this.random() < 0.55 ? "weapon" : "armor";
     const reward = this.makeLoot(player.ownerId, player.x, player.y, type, quality);
-    let equipped = false;
-    if (type === "weapon") {
-      if (reward.value > player.weaponPower) {
-        player.weaponName = reward.name;
-        player.weaponPower = reward.value;
-        equipped = true;
-      }
-    } else {
-      if (reward.value > player.armorPower) {
-        player.armorName = reward.name;
-        player.armorPower = reward.value;
-        equipped = true;
-      }
-    }
+    const collected = this.collectEquipment(player, reward);
     player.rewardQuality = quality.name;
     this.emitFeed(`Boss 贡献 ${Math.round(ratio * 100)}%，获得 ${reward.name}`, "good", player.ownerId, player.id);
-    return equipped ? undefined : reward;
+    return collected ? undefined : reward;
   }
 
   private updateRewardQuality(player: EntityState, bossMaxHealth: number): void {
@@ -744,9 +854,8 @@ export class BattleSimulation {
     if (alive.length > 1) return;
     this.matchFinished = true;
     const winner = alive[0];
-    if (!winner) return;
-    this.emitFeed(`${winner.name} 成为最后的幸存者！`, "good", "");
-    if (winner.kind === "player" && !this.resultSent.has(winner.id)) {
+    if (winner) this.emitFeed(`${winner.name} 成为最后的幸存者！`, "good", "");
+    if (winner?.kind === "player" && !this.resultSent.has(winner.id)) {
       this.resultSent.add(winner.id);
       this.events.matchEnd?.({
         victory: true,
@@ -757,6 +866,18 @@ export class BattleSimulation {
         winnerName: winner.name,
       }, winner.id);
     }
+    for (const [playerId, result] of this.pendingResults) {
+      if (this.resultSent.has(playerId)) continue;
+      this.resultSent.add(playerId);
+      this.events.matchEnd?.({ ...result, winnerName: winner?.name }, playerId);
+    }
+    this.pendingResults.clear();
+  }
+
+  private nearestPublicSurvivor(source: EntityState): EntityState | undefined {
+    return [...this.state.entities.values()]
+      .filter((entity) => entity.ownerId === "" && entity.stage === "battle" && entity.kind !== "boss" && entity.alive)
+      .sort((a, b) => distance(source, a) - distance(source, b))[0];
   }
 
   private updateAliveCount(): void {
@@ -828,6 +949,55 @@ export class BattleSimulation {
       this.state.loot.set(item.id, item);
     }
     if (entity.potions > 0) this.addLoot("", entity.x, entity.y + 24, "potion", undefined, entity.potions);
+    for (const item of this.inventoryItems(entity.id)) {
+      const loot = this.lootFromInventory(item, "", entity.x + (this.random() - 0.5) * 64, entity.y + (this.random() - 0.5) * 64);
+      this.state.loot.set(loot.id, loot);
+      this.state.inventory.delete(item.id);
+    }
+  }
+
+  private applyEquipment(entity: EntityState, item: Pick<LootState, "type" | "name" | "value"> | InventoryItemState): void {
+    if (item.type === "weapon") {
+      entity.weaponName = item.name;
+      entity.weaponPower = item.value;
+    } else if (item.type === "armor") {
+      entity.armorName = item.name;
+      entity.armorPower = item.value;
+    }
+  }
+
+  private inventoryItems(ownerId: string): InventoryItemState[] {
+    return [...this.state.inventory.values()].filter((item) => item.ownerId === ownerId);
+  }
+
+  private clearInventory(ownerId: string): void {
+    for (const item of this.inventoryItems(ownerId)) this.state.inventory.delete(item.id);
+  }
+
+  private inventoryItemFromLoot(ownerId: string, loot: LootState): InventoryItemState {
+    const item = new InventoryItemState();
+    item.id = this.nextId("inventory");
+    item.ownerId = ownerId;
+    item.type = loot.type;
+    item.name = loot.name;
+    item.quality = loot.quality;
+    item.color = loot.color;
+    item.value = loot.value;
+    return item;
+  }
+
+  private lootFromInventory(item: InventoryItemState, ownerId: string, x: number, y: number): LootState {
+    const loot = new LootState();
+    loot.id = this.nextId("loot");
+    loot.ownerId = ownerId;
+    loot.x = clamp(x, 35, WORLD.width - 35);
+    loot.y = clamp(y, 35, WORLD.height - 35);
+    loot.type = item.type;
+    loot.name = item.name;
+    loot.quality = item.quality;
+    loot.color = item.color;
+    loot.value = item.value;
+    return loot;
   }
 
   private qualityFromValue(value: number, base: number): QualityDefinition {
@@ -935,10 +1105,11 @@ export class BattleSimulation {
     const stepY = dy / steps;
     for (let step = 0; step < steps; step += 1) {
       const nextX = clamp(entity.x + stepX, entity.radius, WORLD.width - entity.radius);
-      if (!this.collidesWithObstacle(entity.stage, nextX, entity.y, entity.radius)) entity.x = nextX;
+      const jumping = entity.kind === "player" && entity.jumpTime > 0.08;
+      if (jumping || !this.collidesWithObstacle(entity.stage, nextX, entity.y, entity.radius)) entity.x = nextX;
 
       const nextY = clamp(entity.y + stepY, entity.radius, WORLD.height - entity.radius);
-      if (!this.collidesWithObstacle(entity.stage, entity.x, nextY, entity.radius)) entity.y = nextY;
+      if (jumping || !this.collidesWithObstacle(entity.stage, entity.x, nextY, entity.radius)) entity.y = nextY;
     }
   }
 
@@ -975,7 +1146,17 @@ export class BattleSimulation {
     this.events.feed?.({ text, tone, ownerId }, targetPlayerId);
   }
 
-  private emitEffect(type: string, source: EntityState, color: string, radius: number): void {
-    this.events.effect?.({ type, x: source.x, y: source.y, angle: source.angle, color, radius, ownerId: source.ownerId });
+  private emitAnimationCue(source: EntityState, actionId: string, kind: AnimationCueMessage["kind"] = "skill"): void {
+    this.events.animation?.({
+      entityId: source.id,
+      kind,
+      actionId,
+      angle: source.angle,
+      ownerId: source.ownerId,
+    });
+  }
+
+  private emitEffect(type: string, source: EntityState, color: string, radius: number, actionId?: string): void {
+    this.events.effect?.({ type, sourceId: source.id, actionId, x: source.x, y: source.y, angle: source.angle, color, radius, ownerId: source.ownerId });
   }
 }

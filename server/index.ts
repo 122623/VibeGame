@@ -8,7 +8,7 @@ import { BattleRoom } from "./rooms/BattleRoom.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDirectory = join(root, ".data");
-const configFile = join(dataDirectory, "player-config.json");
+const playersDirectory = join(dataDirectory, "players");
 const distributionDirectory = join(root, "dist");
 const port = Number(process.env.PORT ?? 2567);
 
@@ -34,18 +34,28 @@ export const server = defineServer({
       response.json({ ok: true, service: "vibe-game", transport: "colyseus" });
     });
 
-    app.get("/api/player/config", async (_request, response) => {
+    app.get("/api/player/config/:profileId", async (request, response) => {
+      const profileId = request.params.profileId;
+      if (!/^[A-Za-z0-9_-]{8,64}$/.test(profileId)) {
+        response.status(400).json({ error: "invalid profile id" });
+        return;
+      }
       try {
-        response.type("application/json").send(await readFile(configFile, "utf8"));
+        response.type("application/json").send(await readFile(join(playersDirectory, `${profileId}.json`), "utf8"));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") response.json(null);
         else throw error;
       }
     });
 
-    app.put("/api/player/config", async (request, response) => {
-      await mkdir(dataDirectory, { recursive: true });
-      await writeFile(configFile, JSON.stringify(request.body ?? {}, null, 2), "utf8");
+    app.put("/api/player/config/:profileId", async (request, response) => {
+      const profileId = request.params.profileId;
+      if (!/^[A-Za-z0-9_-]{8,64}$/.test(profileId)) {
+        response.status(400).json({ error: "invalid profile id" });
+        return;
+      }
+      await mkdir(playersDirectory, { recursive: true });
+      await writeFile(join(playersDirectory, `${profileId}.json`), JSON.stringify(request.body ?? {}, null, 2), "utf8");
       response.json({ ok: true, savedAt: new Date().toISOString() });
     });
 

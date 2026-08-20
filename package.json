@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/index.ts",
     "check": "tsc --noEmit",
-    "test": "tsx tests/server-smoke.ts"
+    "test": "tsx tests/run-tests.ts"
   },
   "dependencies": {
     "@colyseus/schema": "4.0.27",

@@ -1,4 +1,5 @@
 export const WORLD = Object.freeze({ width: 2400, height: 1600 });
+export const INVENTORY_CAPACITY = 6;
 
 export const PREPARATION = Object.freeze({
   duration: 60,
@@ -82,11 +83,12 @@ export interface InputMessage {
   angle: number;
 }
 
-export type ActionType = "attack" | "skill" | "interact" | "dodge" | "potion";
+export type ActionType = "attack" | "skill" | "interact" | "dodge" | "jump" | "potion" | "equip" | "drop";
 
 export interface ActionMessage {
   type: ActionType;
   index?: number;
+  itemId?: string;
 }
 
 export interface FeedMessage {
@@ -98,12 +100,26 @@ export interface FeedMessage {
 
 export interface EffectMessage {
   type: string;
+  sourceId?: string;
+  targetId?: string;
+  actionId?: string;
   x: number;
   y: number;
   color?: string;
   radius?: number;
   angle?: number;
   text?: string;
+  ownerId?: string;
+}
+
+export type AnimationCueKind = "attack" | "skill";
+
+export interface AnimationCueMessage {
+  entityId: string;
+  kind: AnimationCueKind;
+  actionId: string;
+  angle?: number;
+  /** Empty means the public battlefield. A session id means a private preparation realm. */
   ownerId?: string;
 }
 
@@ -115,6 +131,12 @@ export interface MatchEndMessage {
   /** Match duration in seconds. */
   time: number;
   winnerName?: string;
+}
+
+export interface SpectateMessage {
+  targetId?: string;
+  targetName?: string;
+  rank: number;
 }
 
 export interface JoinOptions {
@@ -142,11 +164,18 @@ export function isActionMessage(value: unknown): value is ActionMessage {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   const action = String(candidate.type);
-  if (!["attack", "skill", "interact", "dodge", "potion"].includes(action)) return false;
+  if (!["attack", "skill", "interact", "dodge", "jump", "potion", "equip", "drop"].includes(action)) return false;
   if (action === "skill") {
     return Number.isInteger(candidate.index)
       && Number(candidate.index) >= 0
-      && Number(candidate.index) <= 3;
+      && Number(candidate.index) <= 3
+      && candidate.itemId === undefined;
   }
-  return candidate.index === undefined;
+  if (action === "equip" || action === "drop") {
+    return typeof candidate.itemId === "string"
+      && candidate.itemId.length > 0
+      && candidate.itemId.length <= 80
+      && candidate.index === undefined;
+  }
+  return candidate.index === undefined && candidate.itemId === undefined;
 }

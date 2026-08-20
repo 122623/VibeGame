@@ -113,6 +113,14 @@ export class PhaserGameController {
     this.scene?.setPaused(paused);
   }
 
+  setInventoryOpen(open: boolean): void {
+    this.scene?.setInventoryOpen(open);
+  }
+
+  performInventoryAction(action: "equip" | "drop", itemId: string): void {
+    this.scene?.performInventoryAction(action, itemId);
+  }
+
   private async teardown(): Promise<void> {
     const room = this.room;
     this.room = undefined;

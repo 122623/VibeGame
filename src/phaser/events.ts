@@ -1,6 +1,6 @@
 const EVENT_PREFIX = "vibegame:";
 
-export type VibeGameEventName = "hud" | "feed" | "pickup" | "finish" | "pause";
+export type VibeGameEventName = "hud" | "feed" | "pickup" | "finish" | "pause" | "inventory" | "spectate";
 
 export function emitGameEvent<T>(name: VibeGameEventName, detail: T): void {
   window.dispatchEvent(new CustomEvent(`${EVENT_PREFIX}${name}`, { detail }));
@@ -27,4 +27,3 @@ export function displayKey(code: string): string {
   };
   return labels[code] ?? code.replace(/^Key/, "").replace(/^Digit/, "");
 }
-

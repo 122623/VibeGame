@@ -10,12 +10,14 @@ import {
   normalizeConfig,
   saveConfig,
 } from "./config.js";
-import { PhaserGameController } from "./phaser/PhaserGameController";
+import fighterPortraitUrl from "./assets/characters/chibi-fantasy-swordsman.png";
 
 type GameController = {
   start(rootId: string): Promise<void> | void;
   destroy(): Promise<void> | void;
   setPaused?: (paused: boolean) => void;
+  setInventoryOpen?: (open: boolean) => void;
+  performInventoryAction?: (action: "equip" | "drop", itemId: string) => void;
 };
 
 type DynamicRecord = Record<string, any>;
@@ -36,6 +38,8 @@ const lobby = select<HTMLElement>("#lobby");
 const gameScreen = select<HTMLElement>("#game-screen");
 const resultScreen = select<HTMLElement>("#result-screen");
 const careerList = select<HTMLElement>("#career-list");
+const careerPanel = select<HTMLElement>(".career-panel");
+const careerArtImage = select<HTMLImageElement>("#career-art-image");
 const skillSlots = select<HTMLElement>("#skill-slots");
 const skillList = select<HTMLElement>("#skill-list");
 const bindingList = select<HTMLElement>("#binding-list");
@@ -46,6 +50,10 @@ const connectionPanel = select<HTMLElement>("#connection-panel");
 const connectionTitle = select<HTMLElement>("#connection-title");
 const connectionMessage = select<HTMLElement>("#connection-message");
 const pausePanel = select<HTMLElement>("#pause-panel");
+const inventoryPanel = select<HTMLElement>("#inventory-panel");
+const inventoryList = select<HTMLElement>("#inventory-list");
+const inventoryEmpty = select<HTMLElement>("#inventory-empty");
+const spectatorHud = select<HTMLElement>("#spectator-hud");
 const startButtonContent = startButton.innerHTML;
 
 let config: DynamicRecord = normalizeConfig();
@@ -55,6 +63,8 @@ let game: GameController | null = null;
 let startGeneration = 0;
 let starting = false;
 const disposedControllers = new WeakSet<object>();
+
+careerArtImage.src = fighterPortraitUrl;
 
 function activeCareer(): DynamicRecord {
   return getCareer(config.careerId);
@@ -67,6 +77,7 @@ function renderLobby(): void {
 }
 
 function renderCareers(): void {
+  careerPanel.style.setProperty("--career", activeCareer().color);
   careerList.replaceChildren(...CAREERS.map((career: DynamicRecord) => {
     const button = document.createElement("button");
     button.className = `career-card${career.id === config.careerId ? " active" : ""}`;
@@ -256,8 +267,10 @@ async function startGame(): Promise<void> {
   select<HTMLElement>("#feed").replaceChildren();
   select<HTMLElement>("#pickup-prompt").classList.add("hidden");
   pausePanel.classList.add("hidden");
+  spectatorHud.classList.add("hidden");
   showConnection("正在连接战场", "正在加入 Colyseus 对局，请稍候……");
 
+  const { PhaserGameController } = await import("./phaser/PhaserGameController");
   const nextGame: GameController = new PhaserGameController(config);
   game = nextGame;
   window.__vibeGame = nextGame;
@@ -285,8 +298,9 @@ async function startGame(): Promise<void> {
 
 function updateHud(state: DynamicRecord): void {
   if (!state?.career) return;
-  select("#alive-count").textContent = String(state.alive);
-  select("#alive-label").textContent = state.stage === "preparation" ? "发育区" : "存活";
+  const preparation = state.stage === "preparation";
+  select("#alive-count").textContent = preparation ? "准备" : String(state.alive);
+  select("#alive-label").textContent = preparation ? "当前阶段" : "存活";
   select("#kill-count").textContent = String(state.kills);
   select("#zone-label").textContent = state.zoneLabel;
   select("#zone-timer").textContent = state.zoneTimer;
@@ -354,6 +368,8 @@ function showResult(result: DynamicRecord): void {
   setStartingState(false);
   hideConnection();
   pausePanel.classList.add("hidden");
+  inventoryPanel.classList.add("hidden");
+  spectatorHud.classList.add("hidden");
   const completedGame = game;
   game = null;
   window.__vibeGame = null;
@@ -384,6 +400,8 @@ async function returnLobby(): Promise<void> {
   setStartingState(false);
   hideConnection();
   pausePanel.classList.add("hidden");
+  inventoryPanel.classList.add("hidden");
+  spectatorHud.classList.add("hidden");
   const currentGame = game;
   game = null;
   window.__vibeGame = null;
@@ -395,6 +413,54 @@ async function returnLobby(): Promise<void> {
 
 function detailOf<T>(event: Event): T {
   return (event as CustomEvent<T>).detail;
+}
+
+function renderInventory(payload: DynamicRecord | null): void {
+  const open = Boolean(payload?.open);
+  inventoryPanel.classList.toggle("hidden", !open);
+  inventoryPanel.setAttribute("aria-hidden", String(!open));
+  if (!open || !payload) return;
+
+  const items: DynamicRecord[] = Array.isArray(payload.items) ? payload.items : [];
+  select("#inventory-weapon").textContent = payload.weapon?.name || "无武器";
+  select("#inventory-weapon-power").textContent = `攻击 +${Number(payload.weapon?.value || 0)}`;
+  select("#inventory-armor").textContent = payload.armor?.name || "无防具";
+  select("#inventory-armor-power").textContent = `防御 +${Number(payload.armor?.value || 0)}`;
+  select("#inventory-capacity").textContent = `${items.length} / ${Number(payload.capacity || 6)}`;
+  inventoryEmpty.classList.toggle("hidden", items.length > 0);
+
+  inventoryList.replaceChildren(...items.map((item) => {
+    const row = document.createElement("div");
+    row.className = "inventory-item";
+    row.style.setProperty("--item-color", typeof item.color === "string" ? item.color : "#c3cbd4");
+
+    const marker = document.createElement("span");
+    marker.className = "inventory-item-marker";
+    marker.textContent = item.type === "armor" ? "甲" : "刃";
+    const copy = document.createElement("div");
+    copy.className = "inventory-item-copy";
+    const name = document.createElement("strong");
+    name.textContent = String(item.name || "未知装备");
+    const detail = document.createElement("span");
+    detail.textContent = `${item.quality || "普通"} · ${item.type === "armor" ? "防御" : "攻击"} +${Number(item.value || 0)}`;
+    copy.append(name, detail);
+
+    const actions = document.createElement("div");
+    actions.className = "inventory-item-actions";
+    const equip = document.createElement("button");
+    equip.type = "button";
+    equip.className = "inventory-equip";
+    equip.textContent = "装备";
+    equip.addEventListener("click", () => game?.performInventoryAction?.("equip", String(item.id)));
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.className = "inventory-drop";
+    drop.textContent = "丢弃";
+    drop.addEventListener("click", () => game?.performInventoryAction?.("drop", String(item.id)));
+    actions.append(equip, drop);
+    row.append(marker, copy, actions);
+    return row;
+  }));
 }
 
 window.addEventListener("vibegame:hud", (event) => {
@@ -415,6 +481,16 @@ window.addEventListener("vibegame:pause", (event) => {
   const open = typeof detail === "boolean" ? detail : Boolean(detail?.paused ?? detail?.open);
   setLocalMenu(open, false);
 });
+window.addEventListener("vibegame:inventory", (event) => {
+  if (game) renderInventory(detailOf<DynamicRecord | null>(event));
+  else renderInventory(null);
+});
+window.addEventListener("vibegame:spectate", (event) => {
+  if (!game) return;
+  const detail = detailOf<DynamicRecord>(event);
+  spectatorHud.classList.toggle("hidden", !detail?.active);
+  if (detail?.active) select("#spectator-target").textContent = String(detail.targetName || "等待幸存者");
+});
 
 select<HTMLButtonElement>("#save-config").addEventListener("click", async () => {
   try {
@@ -434,6 +510,7 @@ startButton.addEventListener("click", () => void startGame());
 select<HTMLButtonElement>("#cancel-connection").addEventListener("click", () => void returnLobby());
 select<HTMLButtonElement>("#resume-game").addEventListener("click", () => setLocalMenu(false, true));
 select<HTMLButtonElement>("#quit-game").addEventListener("click", () => void returnLobby());
+select<HTMLButtonElement>("#close-inventory").addEventListener("click", () => game?.setInventoryOpen?.(false));
 select<HTMLButtonElement>("#play-again").addEventListener("click", () => void startGame());
 select<HTMLButtonElement>("#back-lobby").addEventListener("click", () => void returnLobby());
 window.addEventListener("keydown", handleBindingCapture, true);

@@ -15,6 +15,7 @@ export type ActionName =
   | "skill4"
   | "interact"
   | "dodge"
+  | "jump"
   | "potion"
   | "inventory";
 
@@ -68,6 +69,8 @@ export interface EntityStateLike {
   cooldown3?: number;
   attackCooldown?: number;
   dodgeCooldown?: number;
+  jumpTime?: number;
+  jumpCooldown?: number;
   invulnerable?: number;
   buffTime?: number;
   slowTime?: number;
@@ -89,9 +92,21 @@ export interface LootStateLike {
   y?: number;
 }
 
+export interface InventoryItemStateLike {
+  id?: string;
+  ownerId?: string;
+  type?: string;
+  name?: string;
+  quality?: string;
+  color?: string;
+  value?: number;
+}
+
 export interface ProjectileStateLike {
   id?: string;
   ownerId?: string;
+  sourceId?: string;
+  actionId?: string;
   kind?: string;
   color?: string;
   x?: number;
@@ -118,6 +133,7 @@ export interface BattleStateLike {
   entities?: SchemaMapLike<EntityStateLike>;
   loot?: SchemaMapLike<LootStateLike>;
   projectiles?: SchemaMapLike<ProjectileStateLike>;
+  inventory?: SchemaMapLike<InventoryItemStateLike>;
   zone?: ZoneStateLike;
   zoneX?: number;
   zoneY?: number;
@@ -137,10 +153,12 @@ export interface SchemaMapLike<T> {
 
 export type {
   ActionMessage,
+  AnimationCueMessage,
   EffectMessage,
   FeedMessage,
   InputMessage,
   MatchEndMessage,
+  SpectateMessage,
 } from "../shared/protocol";
 
 export interface SceneBridge {
@@ -153,6 +171,8 @@ export interface PhaserSceneHandle {
   attachRoom(room: Room): void;
   detachRoom(): void;
   setPaused(paused: boolean): void;
+  setInventoryOpen(open: boolean): void;
+  performInventoryAction(action: "equip" | "drop", itemId: string): void;
 }
 
 export const DEFAULT_BINDINGS: Record<ActionName, string> = {
@@ -160,13 +180,14 @@ export const DEFAULT_BINDINGS: Record<ActionName, string> = {
   moveDown: "ArrowDown",
   moveLeft: "ArrowLeft",
   moveRight: "ArrowRight",
-  attack: "KeyJ",
+  attack: "KeyX",
   skill1: "KeyQ",
   skill2: "KeyW",
   skill3: "KeyE",
   skill4: "KeyR",
   interact: "KeyF",
   dodge: "ShiftLeft",
+  jump: "Space",
   potion: "Digit1",
   inventory: "Tab",
 };

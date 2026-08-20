@@ -1,12 +1,56 @@
 export const TEXTURES = {
-  fighter: "vibegame:fighter-placeholder",
-  boss: "vibegame:boss-placeholder",
-  loot: "vibegame:loot-placeholder",
-  potion: "vibegame:potion-placeholder",
-  projectile: "vibegame:projectile-placeholder",
-  portal: "vibegame:portal-placeholder",
-  wall: "vibegame:wall-placeholder",
+  fighters: {
+    berserker: "vibegame:fighter-berserker",
+    weaponMaster: "vibegame:fighter-weapon-master",
+    soulBender: "vibegame:fighter-soul-bender",
+    ghostblade: "vibegame:fighter-ghostblade",
+    asura: "vibegame:fighter-asura",
+  },
+  animations: {
+    berserkerBasicAttack: "vibegame:sheet-berserker-basic-attack",
+    berserkerBloodSlash: "vibegame:sheet-berserker-blood-slash",
+  },
+  boss: "vibegame:boss-mechanical-bull",
+  effects: {
+    berserker: "vibegame:fx-berserker",
+    weaponMaster: "vibegame:fx-weapon-master",
+    soulBender: "vibegame:fx-soul-bender",
+    ghostblade: "vibegame:fx-ghostblade",
+    asura: "vibegame:fx-asura",
+  },
+  fxParticle: "vibegame:fx-particle",
+  weaponLoot: "vibegame:loot-weapon",
+  armorLoot: "vibegame:loot-armor",
+  potion: "vibegame:loot-potion",
+  projectile: "vibegame:projectile",
+  portal: "vibegame:portal",
+  wall: "vibegame:wall",
 } as const;
+
+export const ANIMATIONS = {
+  berserkerBasicAttack: "vibegame:animation-berserker-basic-attack",
+  berserkerBloodSlash: "vibegame:animation-berserker-blood-slash",
+} as const;
+
+export const BASIC_ATTACK_ANIMATION = Object.freeze({
+  actionId: "basic-attack",
+  key: ANIMATIONS.berserkerBasicAttack,
+  textureKey: TEXTURES.animations.berserkerBasicAttack,
+  frameDurations: Object.freeze([35, 55, 50, 45, 50, 65]),
+  impactFrame: 2,
+  impactDelayMs: 90,
+  totalDurationMs: 300,
+});
+
+export const BLOOD_SLASH_ANIMATION = Object.freeze({
+  actionId: "blood-slash",
+  key: ANIMATIONS.berserkerBloodSlash,
+  textureKey: TEXTURES.animations.berserkerBloodSlash,
+  frameDurations: Object.freeze([40, 50, 55, 45, 55, 65, 75, 85]),
+  impactFrame: 3,
+  impactDelayMs: 145,
+  totalDurationMs: 470,
+});
 
 export interface CareerPresentation {
   id: string;

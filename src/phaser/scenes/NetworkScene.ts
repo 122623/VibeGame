@@ -3,16 +3,19 @@ import type { Room } from "@colyseus/sdk";
 import {
   BATTLE,
   BATTLE_OBSTACLES,
+  INVENTORY_CAPACITY,
   PORTAL,
   PREPARATION_OBSTACLES,
   WORLD,
   isActionMessage,
   isOwnedBy,
   type ActionMessage,
+  type AnimationCueMessage,
   type EffectMessage,
   type FeedMessage,
   type InputMessage,
   type MatchEndMessage,
+  type SpectateMessage,
 } from "../../shared/protocol";
 import {
   CAREERS,
@@ -27,6 +30,7 @@ import {
   type BattleStateLike,
   type EntityStateLike,
   type GameStage,
+  type InventoryItemStateLike,
   type LootStateLike,
   type PhaserClientConfig,
   type PhaserSceneHandle,
@@ -37,6 +41,9 @@ import {
 } from "../types";
 import { EntityView } from "../views/EntityView";
 import { LootView, parseColor, ProjectileView } from "../views/WorldObjectViews";
+import { CombatEffectRenderer } from "../views/CombatEffectRenderer";
+import { CombatAudio } from "../CombatAudio";
+import { getActionPresentation } from "../combatPresentation";
 
 const INPUT_INTERVAL_MS = 1000 / 30;
 const PLAYER_SPEED_FALLBACK = 235;
@@ -49,6 +56,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
   private room?: Room;
   private sessionId = "";
   private paused = false;
+  private inventoryOpen = false;
   private stage: GameStage = "preparation";
   private sequence = 0;
   private inputAccumulator = 0;
@@ -73,14 +81,32 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
   };
   private lastPickupSignature = "";
   private intentionalDetach = false;
+  private latestState?: BattleStateLike;
+  private spectating = false;
+  private spectateTargetId = "";
+  private readonly combatAudio = new CombatAudio();
+  private effectRenderer!: CombatEffectRenderer;
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (this.isBoundCode(event.code) || event.code === "Escape") event.preventDefault();
+    this.combatAudio.unlock();
+    if (this.isBoundCode(event.code) || event.code === "KeyX" || event.code === "Escape") event.preventDefault();
     if (event.code === "Escape" && !event.repeat) {
+      if (this.inventoryOpen) {
+        this.setInventoryOpen(false);
+        return;
+      }
       this.setPaused(!this.paused);
       return;
     }
-    if (this.paused) return;
+    if (event.code === this.bindings().inventory && !event.repeat) {
+      if (!this.paused) this.setInventoryOpen(!this.inventoryOpen);
+      return;
+    }
+    if (this.paused || this.inventoryOpen) return;
+    if (this.localEntity?.state.alive === false && event.code === "Space" && !event.repeat) {
+      this.cycleSpectateTarget();
+      return;
+    }
     this.keys.add(event.code);
     if (!event.repeat) this.handleBoundAction(event.code);
   };
@@ -90,7 +116,8 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
   };
 
   private readonly onPointerDown = (pointer: Phaser.Input.Pointer): void => {
-    if (!this.paused && pointer.leftButtonDown()) this.sendAction({ type: "attack" });
+    this.combatAudio.unlock();
+    if (!this.paused && !this.inventoryOpen && pointer.leftButtonDown()) this.sendAction({ type: "attack" });
   };
 
   constructor() {
@@ -101,6 +128,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     const bridge = this.registry.get(SCENE_BRIDGE_KEY) as SceneBridge | undefined;
     if (!bridge) throw new Error("Phaser client bridge is missing.");
     this.config = bridge.config;
+    this.effectRenderer = new CombatEffectRenderer(this);
 
     this.mapGraphics = this.add.graphics().setDepth(-1000);
     this.zoneGraphics = this.add.graphics().setDepth(9000);
@@ -160,8 +188,10 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
       this.applyState(state as BattleStateLike);
     });
     room.onMessage("feed", (message: FeedMessage) => this.handleFeed(message));
+    room.onMessage("animation", (message: AnimationCueMessage) => this.handleAnimation(message));
     room.onMessage("effect", (message: EffectMessage) => this.handleEffect(message));
     room.onMessage("matchEnd", (message: MatchEndMessage) => this.handleMatchEnd(message));
+    room.onMessage("spectate", (message: SpectateMessage) => this.handleSpectate(message));
     room.onError((code: number, message?: string) => {
       if (this.room !== room) return;
       emitGameEvent("feed", { text: `网络错误 ${code}：${message}`, tone: "danger" });
@@ -172,6 +202,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     });
 
     this.applyState(room.state as unknown as BattleStateLike);
+    room.send("ready");
     emitGameEvent("feed", { text: "已连接战斗房间", tone: "good" });
   }
 
@@ -180,6 +211,11 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     this.room = undefined;
     this.sessionId = "";
     this.keys.clear();
+    this.latestState = undefined;
+    this.spectating = false;
+    this.spectateTargetId = "";
+    emitGameEvent("spectate", { active: false });
+    this.setInventoryOpen(false);
   }
 
   setPaused(paused: boolean): void {
@@ -187,6 +223,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     this.paused = paused;
     this.keys.clear();
     if (paused) {
+      this.setInventoryOpen(false);
       this.physics.pause();
       this.localEntity?.sprite.setVelocity(0, 0);
     } else {
@@ -194,6 +231,22 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     }
     if (this.room) this.room.send("input", this.createInputMessage(true));
     emitGameEvent("pause", paused);
+  }
+
+  setInventoryOpen(open: boolean): void {
+    if (this.inventoryOpen === open) {
+      if (open) this.emitInventory(this.latestState);
+      return;
+    }
+    this.inventoryOpen = open;
+    this.keys.clear();
+    this.localEntity?.sprite.setVelocity(0, 0);
+    if (this.room) this.room.send("input", this.createInputMessage(true));
+    this.emitInventory(open ? this.latestState : undefined);
+  }
+
+  performInventoryAction(action: "equip" | "drop", itemId: string): void {
+    this.sendAction({ type: action, itemId });
   }
 
   private shutdown(): void {
@@ -208,12 +261,16 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     this.entityViews.clear();
     this.lootViews.clear();
     this.projectileViews.clear();
+    this.effectRenderer?.destroy();
+    this.combatAudio.dispose();
     emitGameEvent("pickup", null);
     emitGameEvent("pause", false);
+    emitGameEvent("spectate", { active: false });
   }
 
   private applyState(state: BattleStateLike): void {
     if (!state) return;
+    this.latestState = state;
     this.reconcileEntities(state.entities);
     this.reconcileLoot(state.loot);
     this.reconcileProjectiles(state.projectiles);
@@ -240,6 +297,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
       this.drawZone();
     }
     this.emitHud(state);
+    if (this.inventoryOpen) this.emitInventory(state);
   }
 
   private reconcileEntities(collection: SchemaMapLike<EntityStateLike> | undefined): void {
@@ -388,7 +446,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
   private updateLocalPrediction(): void {
     const local = this.localEntity;
     if (!local) return;
-    if (this.paused || local.state.alive === false) {
+    if (this.paused || this.inventoryOpen || local.state.alive === false) {
       local.sprite.setVelocity(0, 0);
       return;
     }
@@ -404,6 +462,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
       const buffMultiplier = finite(local.state.buffTime, 0) > 0 ? BUFF_SPEED_MULTIPLIER : 1;
       direction.normalize().scale(baseSpeed * slowMultiplier * buffMultiplier);
     }
+    if (this.localCollider) this.localCollider.active = finite(local.state.jumpTime, 0) <= 0.08;
     local.sprite.setVelocity(direction.x, direction.y);
   }
 
@@ -417,7 +476,7 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
 
   private createInputMessage(forceIdle = false): InputMessage {
     const bindings = this.bindings();
-    const idle = forceIdle || this.paused || this.localEntity?.state.alive === false;
+    const idle = forceIdle || this.paused || this.inventoryOpen || this.localEntity?.state.alive === false;
     return {
       seq: ++this.sequence,
       up: !idle && this.keys.has(bindings.moveUp),
@@ -430,9 +489,10 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
 
   private handleBoundAction(code: string): void {
     const bindings = this.bindings();
-    if (code === bindings.attack) this.sendAction({ type: "attack" });
+    if (code === "KeyX" || code === bindings.attack) this.sendAction({ type: "attack" });
     else if (code === bindings.interact) this.sendAction({ type: "interact" });
     else if (code === bindings.dodge) this.sendAction({ type: "dodge" });
+    else if (code === bindings.jump) this.sendAction({ type: "jump" });
     else if (code === bindings.potion) this.sendAction({ type: "potion" });
     else {
       for (let index = 0; index < 4; index += 1) {
@@ -445,10 +505,19 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
 
   private sendAction(action: ActionMessage): void {
     if (!this.room || this.paused || this.localEntity?.state.alive === false) return;
+    const inventoryAction = action.type === "equip" || action.type === "drop";
+    if (this.inventoryOpen && !inventoryAction) return;
     const payload: ActionMessage = action.type === "skill"
       ? { type: "skill", index: action.index }
-      : { type: action.type };
+      : inventoryAction
+        ? { type: action.type, itemId: action.itemId }
+        : { type: action.type };
     if (!isActionMessage(payload)) return;
+
+    if (inventoryAction) {
+      this.room.send("action", payload);
+      return;
+    }
 
     // Colyseus preserves message order, so the authoritative simulation receives the
     // latest aim before resolving an attack, skill or dodge action.
@@ -480,45 +549,79 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     emitGameEvent("feed", message);
   }
 
+  private handleAnimation(message: AnimationCueMessage): void {
+    if (message.ownerId && message.ownerId !== this.sessionId) return;
+    const source = this.entityViews.get(message.entityId);
+    if (!source) return;
+    const played = message.kind === "attack"
+      ? source.playBasicAttackAnimation(message)
+      : source.playSkillAnimation(message);
+    if (played) this.effectRenderer.beginAction(message, source);
+  }
+
   private handleEffect(effect: EffectMessage): void {
     if (effect.ownerId && effect.ownerId !== this.sessionId) return;
-    const color = parseColor(effect.color, effect.type === "damage" ? 0xff5d67 : 0x74d7ff);
-    const radius = Math.max(12, finite(effect.radius, 54));
-    const graphics = this.add.graphics({ x: effect.x, y: effect.y }).setDepth(8000);
-    graphics.lineStyle(5, color, 0.9).strokeCircle(0, 0, radius);
-    graphics.fillStyle(color, 0.12).fillCircle(0, 0, radius);
-    this.tweens.add({
-      targets: graphics,
-      scale: 1.65,
-      alpha: 0,
-      duration: 330,
-      ease: "Cubic.Out",
-      onComplete: () => graphics.destroy(),
-    });
-
-    if (effect.text) {
-      const text = this.add.text(effect.x, effect.y - radius, effect.text, {
-        fontFamily: "system-ui, sans-serif",
-        fontSize: "18px",
-        fontStyle: "bold",
-        color: `#${color.toString(16).padStart(6, "0")}`,
-        stroke: "#090c12",
-        strokeThickness: 4,
-      }).setOrigin(0.5).setDepth(8100);
-      this.tweens.add({
-        targets: text,
-        y: text.y - 34,
-        alpha: 0,
-        duration: 650,
-        ease: "Cubic.Out",
-        onComplete: () => text.destroy(),
+    const source = effect.sourceId
+      ? this.entityViews.get(effect.sourceId)
+      : this.nearestEntityView(effect.x, effect.y);
+    const delay = source?.effectDelayFor(effect) ?? 0;
+    if (delay > 0) {
+      this.time.delayedCall(delay, () => {
+        if (this.sys.isActive()) this.renderEffect(effect);
       });
+      return;
     }
+    this.renderEffect(effect);
+  }
+
+  private renderEffect(effect: EffectMessage): void {
+    this.combatAudio.play(effect.type);
+    const source = effect.sourceId
+      ? this.entityViews.get(effect.sourceId)
+      : this.nearestEntityView(effect.x, effect.y);
+    const target = effect.targetId
+      ? this.entityViews.get(effect.targetId)
+      : effect.type === "damage" || effect.type === "death"
+        ? this.nearestEntityView(effect.x, effect.y)
+        : undefined;
+    if (effect.type === "slash" || effect.type === "skillSlash") {
+      source?.playAttack(
+        finite(effect.angle, source.state.angle ?? 0),
+        effect.actionId ?? (effect.type === "slash" ? "basic-attack" : "skill-attack"),
+        effect.type === "slash" ? "attack" : "skill",
+      );
+    }
+    if (effect.type === "damage") {
+      const intensity = effect.actionId ? getActionPresentation(effect.actionId).intensity : 1;
+      target?.flash();
+      target?.playHitReaction(finite(effect.angle, target.state.angle ?? 0), intensity);
+    }
+    this.effectRenderer.play(effect, source);
 
     const local = this.localEntity;
-    if (local && Phaser.Math.Distance.Between(local.sprite.x, local.sprite.y, effect.x, effect.y) < 240) {
-      this.cameras.main.shake(75, 0.0035, true);
+    const cameraImpact = effect.type === "slash"
+      || effect.type === "skillSlash"
+      || effect.type === "ring"
+      || effect.type === "dash"
+      || effect.type === "death";
+    if (local && cameraImpact && Phaser.Math.Distance.Between(local.sprite.x, local.sprite.y, effect.x, effect.y) < 300) {
+      const profile = effect.actionId ? getActionPresentation(effect.actionId) : undefined;
+      const duration = effect.type === "death" ? 130 : profile?.shakeDurationMs ?? 75;
+      const intensity = effect.type === "death" ? 0.0055 : profile?.shakeIntensity ?? 0.0035;
+      if (duration > 0 && intensity > 0) this.cameras.main.shake(duration, intensity, true);
     }
+  }
+
+  private nearestEntityView(x: number, y: number): EntityView | undefined {
+    let nearest: EntityView | undefined;
+    let nearestDistance = 90;
+    for (const view of this.entityViews.values()) {
+      const distance = Phaser.Math.Distance.Between(view.sprite.x, view.sprite.y, x, y);
+      if (distance >= nearestDistance) continue;
+      nearest = view;
+      nearestDistance = distance;
+    }
+    return nearest;
   }
 
   private handleMatchEnd(message: MatchEndMessage): void {
@@ -530,9 +633,38 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
     });
   }
 
+  private handleSpectate(message: SpectateMessage): void {
+    this.spectating = true;
+    this.spectateTargetId = message.targetId ?? "";
+    const target = this.entityViews.get(this.spectateTargetId);
+    if (target) this.cameras.main.startFollow(target.sprite, false, 0.14, 0.14);
+    emitGameEvent("spectate", {
+      active: true,
+      targetName: target?.state.name ?? message.targetName ?? "等待幸存者",
+      rank: message.rank,
+    });
+  }
+
+  private cycleSpectateTarget(): void {
+    if (!this.spectating) return;
+    const targets = [...this.entityViews.values()].filter((view) =>
+      view.id !== this.sessionId
+      && view.kind !== "boss"
+      && view.state.stage === "battle"
+      && view.state.alive !== false
+      && finite(view.state.health, 1) > 0,
+    );
+    if (targets.length === 0) return;
+    const currentIndex = targets.findIndex((view) => view.id === this.spectateTargetId);
+    const target = targets[(currentIndex + 1) % targets.length];
+    this.spectateTargetId = target.id;
+    this.cameras.main.startFollow(target.sprite, false, 0.14, 0.14);
+    emitGameEvent("spectate", { active: true, targetName: target.state.name ?? "幸存者" });
+  }
+
   private updatePickupPrompt(): void {
     const local = this.localEntity;
-    if (!local || this.paused || local.state.alive === false) {
+    if (!local || this.paused || this.inventoryOpen || local.state.alive === false) {
       this.setPickupPrompt(null, "");
       return;
     }
@@ -628,6 +760,34 @@ export class NetworkScene extends Phaser.Scene implements PhaserSceneHandle {
         contribution,
         reward: local.rewardQuality || "无",
       } : undefined,
+    });
+  }
+
+  private emitInventory(state: BattleStateLike | undefined): void {
+    if (!this.inventoryOpen || !state) {
+      emitGameEvent("inventory", { open: false });
+      return;
+    }
+    const local = this.localEntity?.state;
+    if (!local) return;
+    const items: Array<Required<Pick<InventoryItemStateLike, "id" | "type" | "name" | "quality" | "color" | "value">>> = [];
+    forEachSchema(state.inventory, (item, key) => {
+      if (item.ownerId && item.ownerId !== this.sessionId) return;
+      items.push({
+        id: item.id || key,
+        type: item.type || "weapon",
+        name: item.name || "未知装备",
+        quality: item.quality || "普通",
+        color: item.color || "#c3cbd4",
+        value: finite(item.value, 0),
+      });
+    });
+    emitGameEvent("inventory", {
+      open: true,
+      capacity: INVENTORY_CAPACITY,
+      items,
+      weapon: { name: local.weaponName || "无武器", value: finite(local.weaponPower, 0) },
+      armor: { name: local.armorName || "无防具", value: finite(local.armorPower, 0) },
     });
   }
 }

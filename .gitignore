@@ -2,6 +2,7 @@
 .artifacts/
 .npm-cache/
 dist/
+output/
 assets/dnf/*
 !assets/dnf/.gitkeep
 node_modules/

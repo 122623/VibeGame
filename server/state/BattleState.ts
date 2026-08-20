@@ -41,6 +41,8 @@ export class EntityState extends Schema {
   @type("float32") cooldown3 = 0;
   @type("float32") attackCooldown = 0;
   @type("float32") dodgeCooldown = 0;
+  @type("float32") jumpTime = 0;
+  @type("float32") jumpCooldown = 0;
   @type("float32") invulnerable = 0;
   @type("float32") buffTime = 0;
   @type("float32") slowTime = 0;
@@ -61,10 +63,21 @@ export class LootState extends Schema {
   @type("uint8") amount = 1;
 }
 
+export class InventoryItemState extends Schema {
+  @type("string") id = "";
+  @type("string") ownerId = "";
+  @type("string") type = "weapon";
+  @type("string") name = "";
+  @type("string") quality = "普通";
+  @type("string") color = "#c3cbd4";
+  @type("float32") value = 0;
+}
+
 export class ProjectileState extends Schema {
   @type("string") id = "";
   @type("string") ownerId = "";
   @type("string") sourceId = "";
+  @type("string") actionId = "";
   @type("float32") x = 0;
   @type("float32") y = 0;
   @type("float32") vx = 0;
@@ -85,6 +98,8 @@ export class BattleState extends Schema {
   @type({ map: LootState }) loot = new MapSchema<LootState>();
   @view()
   @type({ map: ProjectileState }) projectiles = new MapSchema<ProjectileState>();
+  @view()
+  @type({ map: InventoryItemState }) inventory = new MapSchema<InventoryItemState>();
 
   @type("float32") zoneX: number = BATTLE.zoneX;
   @type("float32") zoneY: number = BATTLE.zoneY;

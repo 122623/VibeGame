@@ -5,13 +5,14 @@ export const DEFAULT_BINDINGS = {
   moveDown: "ArrowDown",
   moveLeft: "ArrowLeft",
   moveRight: "ArrowRight",
-  attack: "KeyJ",
+  attack: "KeyX",
   skill1: "KeyQ",
   skill2: "KeyW",
   skill3: "KeyE",
   skill4: "KeyR",
   interact: "KeyF",
   dodge: "ShiftLeft",
+  jump: "Space",
   potion: "Digit1",
   inventory: "Tab",
 };
@@ -28,6 +29,7 @@ export const BINDING_LABELS = {
   skill4: "技能 R",
   interact: "拾取 / 交互",
   dodge: "闪避",
+  jump: "跳跃 / 翻越障碍",
   potion: "使用药剂",
   inventory: "背包",
 };
@@ -114,17 +116,30 @@ export function normalizeConfig(input = {}) {
 
   const bindings = { ...DEFAULT_BINDINGS };
   for (const action of Object.keys(bindings)) {
-    if (typeof input.bindings?.[action] === "string") bindings[action] = input.bindings[action];
+    if (typeof input.bindings?.[action] !== "string") continue;
+    if (action === "attack" && input.bindings[action] === "KeyJ") continue;
+    bindings[action] = input.bindings[action];
   }
 
   return { careerId, skillsByCareer, bindings };
+}
+
+/** @param {Pick<Storage, "getItem" | "setItem">} storage */
+export function getProfileId(storage = localStorage) {
+  const key = "vibegame-profile-id";
+  const existing = storage.getItem(key);
+  if (existing && /^[A-Za-z0-9_-]{8,64}$/.test(existing)) return existing;
+  const generated = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
+    ?? `player_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  storage.setItem(key, generated);
+  return generated;
 }
 
 export async function loadConfig() {
   const cached = localStorage.getItem("vibegame-config");
   let config = cached ? normalizeConfig(JSON.parse(cached)) : normalizeConfig();
   try {
-    const response = await fetch("/api/player/config");
+    const response = await fetch(`/api/player/config/${encodeURIComponent(getProfileId())}`);
     if (response.ok) {
       const serverConfig = await response.json();
       if (serverConfig) config = normalizeConfig(serverConfig);
@@ -138,7 +153,7 @@ export async function loadConfig() {
 export async function saveConfig(config) {
   const normalized = normalizeConfig(config);
   localStorage.setItem("vibegame-config", JSON.stringify(normalized));
-  const response = await fetch("/api/player/config", {
+  const response = await fetch(`/api/player/config/${encodeURIComponent(getProfileId())}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(normalized),

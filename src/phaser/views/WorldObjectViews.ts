@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { getActionPresentation } from "../combatPresentation";
 import { QUALITY_COLORS, TEXTURES } from "../constants";
 import type { LootStateLike, ProjectileStateLike } from "../types";
 
@@ -21,7 +22,8 @@ export class LootView {
     this.targetX = numberOr(state.x, 0);
     this.targetY = numberOr(state.y, 0);
     const isPotion = state.kind === "potion" || state.type === "potion";
-    this.sprite = scene.add.sprite(this.targetX, this.targetY, isPotion ? TEXTURES.potion : TEXTURES.loot);
+    const texture = isPotion ? TEXTURES.potion : state.type === "armor" ? TEXTURES.armorLoot : TEXTURES.weaponLoot;
+    this.sprite = scene.add.sprite(this.targetX, this.targetY, texture);
     this.sprite.setTint(isPotion ? 0x57d99a : parseColor(state.color, qualityColor(state.quality)));
     this.sprite.setDepth(Math.round(this.targetY));
     this.label = scene.add.text(this.targetX, this.targetY - 25, state.name || (isPotion ? "生命药剂" : "装备"), {
@@ -67,34 +69,90 @@ export class ProjectileView {
   targetX: number;
   targetY: number;
 
+  private readonly trail: Phaser.GameObjects.Graphics;
+  private readonly trailX = new Float32Array(14);
+  private readonly trailY = new Float32Array(14);
+  private trailHead = 0;
+  private trailCount = 0;
+  private elapsed = 0;
+  private color: number;
+  private intensity: number;
+
   constructor(scene: Phaser.Scene, id: string, state: ProjectileStateLike) {
     this.id = id;
     this.state = state;
     this.targetX = numberOr(state.x, 0);
     this.targetY = numberOr(state.y, 0);
+    this.color = parseColor(state.color, 0x77d5ff);
+    this.intensity = state.actionId ? getActionPresentation(state.actionId).intensity : 1;
+    this.trail = scene.add.graphics().setDepth(4999).setBlendMode(Phaser.BlendModes.ADD);
     this.sprite = scene.add.sprite(this.targetX, this.targetY, TEXTURES.projectile);
     this.sprite.setRotation(projectileAngle(state, 0));
-    this.sprite.setTint(parseColor(state.color, 0x77d5ff));
+    this.sprite.setTint(this.color);
     this.sprite.setBlendMode(Phaser.BlendModes.ADD);
     this.sprite.setDepth(5000);
+    this.recordTrailPoint(this.targetX, this.targetY);
   }
 
   applyState(state: ProjectileStateLike): void {
     this.state = state;
     this.targetX = numberOr(state.x, this.targetX);
     this.targetY = numberOr(state.y, this.targetY);
+    this.color = parseColor(state.color, this.color);
+    this.intensity = state.actionId ? getActionPresentation(state.actionId).intensity : this.intensity;
     this.sprite.setRotation(projectileAngle(state, this.sprite.rotation));
-    this.sprite.setTint(parseColor(state.color, 0x77d5ff));
+    this.sprite.setTint(this.color);
   }
 
   update(deltaMs: number): void {
-    const interpolation = 1 - Math.exp(-22 * Math.min(0.05, deltaMs / 1000));
+    const deltaSeconds = Math.min(0.05, deltaMs / 1000);
+    this.elapsed += deltaSeconds;
+    const interpolation = 1 - Math.exp(-22 * deltaSeconds);
     this.sprite.x = Phaser.Math.Linear(this.sprite.x, this.targetX, interpolation);
     this.sprite.y = Phaser.Math.Linear(this.sprite.y, this.targetY, interpolation);
+    const newest = (this.trailHead - 1 + this.trailX.length) % this.trailX.length;
+    if (Phaser.Math.Distance.Between(this.trailX[newest], this.trailY[newest], this.sprite.x, this.sprite.y) >= 5) {
+      this.recordTrailPoint(this.sprite.x, this.sprite.y);
+    }
+    const birth = Phaser.Math.Easing.Cubic.Out(Phaser.Math.Clamp(this.elapsed / 0.09, 0, 1));
+    const pulse = 1 + Math.sin(this.elapsed * 22) * 0.055;
+    this.sprite.setScale(Phaser.Math.Linear(0.42, 1, birth) * pulse * this.intensity);
+    this.sprite.setAlpha(Phaser.Math.Linear(0.3, 1, birth));
+    this.drawTrail();
   }
 
   destroy(): void {
+    this.trail.destroy();
     this.sprite.destroy();
+  }
+
+  private recordTrailPoint(x: number, y: number): void {
+    this.trailX[this.trailHead] = x;
+    this.trailY[this.trailHead] = y;
+    this.trailHead = (this.trailHead + 1) % this.trailX.length;
+    this.trailCount = Math.min(this.trailCount + 1, this.trailX.length);
+  }
+
+  private drawTrail(): void {
+    this.trail.clear();
+    if (this.trailCount < 2) return;
+    const oldest = (this.trailHead - this.trailCount + this.trailX.length) % this.trailX.length;
+    for (let index = 1; index < this.trailCount; index += 1) {
+      const previous = (oldest + index - 1) % this.trailX.length;
+      const current = (oldest + index) % this.trailX.length;
+      const progress = index / (this.trailCount - 1);
+      this.trail.lineStyle(
+        (1.5 + progress * 5.5) * this.intensity,
+        index === this.trailCount - 1 ? 0xffffff : this.color,
+        0.06 + progress * 0.58,
+      );
+      this.trail.lineBetween(
+        this.trailX[previous],
+        this.trailY[previous],
+        this.trailX[current],
+        this.trailY[current],
+      );
+    }
   }
 }
 
